@@ -613,7 +613,7 @@ const fileMetaSchema = new mongoose.Schema(
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     category: {
       type: String,
-      enum: ['question_file', 'answer_file', 'exam_resource'],
+      enum: ['question_file', 'answer_file', 'exam_resource', 'lecture_file'],
       default: 'answer_file',
     },
     filename: { type: String, required: true, maxlength: 160 },
@@ -621,6 +621,7 @@ const fileMetaSchema = new mongoose.Schema(
     size: { type: Number, required: true },
     relatedExam: { type: mongoose.Schema.Types.ObjectId, ref: 'Examination', default: null },
     relatedSubmission: { type: mongoose.Schema.Types.ObjectId, ref: 'Submission', default: null },
+    relatedLecture: { type: mongoose.Schema.Types.ObjectId, ref: 'Lecture', default: null },
   },
   { timestamps: true }
 );
@@ -675,6 +676,33 @@ const Notification = mongoose.model('Notification', notificationSchema);
 const ActivityLog = mongoose.model('ActivityLog', activityLogSchema);
 const FileMeta = mongoose.model('FileMeta', fileMetaSchema);
 const Certificate = mongoose.model('Certificate', certificateSchema);
+const Lecture = mongoose.model('Lecture', new mongoose.Schema(
+  {
+    title: { type: String, required: true, trim: true, minlength: 3, maxlength: 160 },
+    code: { type: String, trim: true, uppercase: true, maxlength: 40, default: '' },
+    department: { type: String, trim: true, maxlength: 100, default: 'Computer Science' },
+    course: { type: String, required: true, trim: true, maxlength: 120, index: true },
+    batchNumber: { type: String, required: true, trim: true, uppercase: true, maxlength: 60, default: 'BATCH-01', index: true },
+    studyOption: { type: String, trim: true, maxlength: 80, default: '' },
+    type: {
+      type: String,
+      enum: ['video_upload', 'video_link', 'pdf_document', 'reading'],
+      required: true,
+      default: 'video_upload',
+    },
+    videoUrl: { type: String, trim: true, maxlength: 1000, default: '' },
+    fileMetaId: { type: mongoose.Schema.Types.ObjectId, ref: 'FileMeta', default: null },
+    filename: { type: String, trim: true, maxlength: 160, default: '' },
+    mimeType: { type: String, trim: true, maxlength: 120, default: '' },
+    fileSize: { type: Number, default: 0 },
+    description: { type: String, trim: true, maxlength: 2000, default: '' },
+    durationMinutes: { type: Number, min: 1, max: 600, default: 30 },
+    order: { type: Number, default: 1 },
+    status: { type: String, enum: ['published', 'draft'], default: 'published', index: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  },
+  { timestamps: true }
+));
 
 // ============================================================================
 // 5. EXPRESS MIDDLEWARE, SECURITY, SESSION & CSRF
@@ -4482,7 +4510,189 @@ function registerRoutes() {
   app.get('/api/certificates/verify', apiLimiter, handleCertificateVerification);
   app.get('/api/certificates/verify/:certificateNumber', apiLimiter, handleCertificateVerification);
 
-  // ---------------- WALLET & TRANSACTIONS ----------------
+  // ---------------- LECTURES & STUDY MATERIALS ----------------
+
+  app.get('/api/lectures', requireAuth, async (req, res, next) => {
+    try {
+      const isAdmin = req.currentUser.role === 'admin';
+      let studentBatch = '';
+      const filter = {};
+
+      if (req.query.department) filter.department = cleanString(req.query.department, 100);
+      if (req.query.course) filter.course = cleanString(req.query.course, 120);
+
+      if (!isAdmin) {
+        const profile = await StudentProfile.findOne({ user: req.currentUser._id }).select('batchNumber').lean();
+        studentBatch = normalizeBatchNumber((profile && profile.batchNumber) || 'BATCH-01') || 'BATCH-01';
+        filter.batchNumber = studentBatch;
+        filter.status = 'published';
+      } else {
+        if (req.query.batchNumber) filter.batchNumber = normalizeBatchNumber(req.query.batchNumber);
+        if (req.query.status && ['published', 'draft'].includes(req.query.status)) filter.status = req.query.status;
+      }
+
+      const [lectures, allDepts, allBatches] = await Promise.all([
+        Lecture.find(filter).sort({ batchNumber: 1, course: 1, order: 1, createdAt: -1 }).lean(),
+        Department.find({}).select('name code courses').lean(),
+        Batch.find({ status: 'active' }).select('batchNumber department course studyOption').lean(),
+      ]);
+
+      const departments = allDepts.map((d) => d.name);
+      const courses = Array.from(
+        new Set([...allDepts.flatMap((d) => (d.courses || []).map((c) => c.title)), ...lectures.map((l) => l.course)])
+      ).filter(Boolean).sort();
+      const batches = Array.from(
+        new Set([...allBatches.map((b) => (b.batchNumber || '').toUpperCase()), ...lectures.map((l) => l.batchNumber)])
+      ).filter(Boolean).sort();
+
+      return res.json({
+        success: true,
+        lectures,
+        studentBatch: !isAdmin ? studentBatch : undefined,
+        metadata: { departments, courses, batches },
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/lectures', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      const title = cleanString(req.body.title, 160);
+      const code = cleanString(req.body.code, 40).toUpperCase();
+      const department = cleanString(req.body.department || 'Computer Science', 100);
+      const course = cleanString(req.body.course, 120);
+      const batchNumber = await resolveAllocatedBatch(req.body.batchNumber, 'BATCH-01');
+      const studyOption = cleanString(req.body.studyOption || '', 80);
+      const type = ['video_upload', 'video_link', 'pdf_document', 'reading'].includes(req.body.type)
+        ? req.body.type
+        : 'video_upload';
+      const videoUrl = cleanString(req.body.videoUrl || '', 1000);
+      const fileMetaId = isValidObjectId(req.body.fileMetaId) ? req.body.fileMetaId : null;
+      const filename = cleanString(req.body.filename || '', 160);
+      const mimeType = cleanString(req.body.mimeType || '', 120);
+      const fileSize = Number(req.body.fileSize) || 0;
+      const description = cleanString(req.body.description, 2000);
+      const durationMinutes = Math.min(600, Math.max(1, Number.parseInt(req.body.durationMinutes, 10) || 30));
+      const order = Number.parseInt(req.body.order, 10) || ((await Lecture.countDocuments({ batchNumber, course })) + 1);
+      const status = ['published', 'draft'].includes(req.body.status) ? req.body.status : 'published';
+
+      if (title.length < 3 || !course) {
+        return res.status(400).json({ success: false, message: 'Lecture title (min 3 chars) and course are required.' });
+      }
+
+      const lecture = await Lecture.create({
+        title,
+        code,
+        department,
+        course,
+        batchNumber,
+        studyOption,
+        type,
+        videoUrl,
+        fileMetaId,
+        filename,
+        mimeType,
+        fileSize,
+        description,
+        durationMinutes,
+        order,
+        status,
+        createdBy: req.currentUser._id,
+      });
+
+      await Batch.updateOne(
+        { batchNumber },
+        {
+          $setOnInsert: {
+            batchNumber,
+            department,
+            course,
+            studyOption,
+            status: 'active',
+            createdBy: req.currentUser._id,
+          },
+        },
+        { upsert: true }
+      );
+
+      // Notify enrolled students in this batch
+      const targetStudents = await StudentProfile.find({ batchNumber }).select('user').lean();
+      const studentUserIds = targetStudents.map((p) => p.user);
+      if (studentUserIds.length && status === 'published') {
+        await Notification.insertMany(
+          studentUserIds.map((uid) => ({
+            user: uid,
+            type: 'announcement',
+            title: `New Lecture: ${course}`,
+            message: `${title} has been published for your batch (${batchNumber}).`,
+            linkView: 'lectures',
+          }))
+        );
+      }
+
+      await recordActivity(
+        req,
+        'LECTURE_CREATED',
+        'Lecture',
+        lecture._id,
+        `Created lecture "${title}" for course ${course} (${batchNumber})`
+      );
+      return res.status(201).json({ success: true, message: `Lecture "${title}" published successfully.`, lecture });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.put('/api/lectures/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid lecture identifier.' });
+      }
+      const lecture = await Lecture.findById(req.params.id);
+      if (!lecture) {
+        return res.status(404).json({ success: false, message: 'Lecture not found.' });
+      }
+
+      if (req.body.title) lecture.title = cleanString(req.body.title, 160);
+      if (req.body.code !== undefined) lecture.code = cleanString(req.body.code, 40).toUpperCase();
+      if (req.body.department) lecture.department = cleanString(req.body.department, 100);
+      if (req.body.course) lecture.course = cleanString(req.body.course, 120);
+      if (req.body.batchNumber) lecture.batchNumber = normalizeBatchNumber(req.body.batchNumber);
+      if (req.body.studyOption !== undefined) lecture.studyOption = cleanString(req.body.studyOption, 80);
+      if (['video_upload', 'video_link', 'pdf_document', 'reading'].includes(req.body.type)) lecture.type = req.body.type;
+      if (req.body.videoUrl !== undefined) lecture.videoUrl = cleanString(req.body.videoUrl, 1000);
+      if (isValidObjectId(req.body.fileMetaId)) lecture.fileMetaId = req.body.fileMetaId;
+      if (req.body.filename !== undefined) lecture.filename = cleanString(req.body.filename, 160);
+      if (req.body.mimeType !== undefined) lecture.mimeType = cleanString(req.body.mimeType, 120);
+      if (req.body.description !== undefined) lecture.description = cleanString(req.body.description, 2000);
+      if (req.body.durationMinutes) lecture.durationMinutes = Math.min(600, Math.max(1, Number(req.body.durationMinutes)));
+      if (['published', 'draft'].includes(req.body.status)) lecture.status = req.body.status;
+
+      await lecture.save();
+      await recordActivity(req, 'LECTURE_UPDATED', 'Lecture', lecture._id, `Updated lecture "${lecture.title}"`);
+      return res.json({ success: true, message: 'Lecture updated successfully.', lecture });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.delete('/api/lectures/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid lecture identifier.' });
+      }
+      const lecture = await Lecture.findById(req.params.id);
+      if (!lecture) {
+        return res.status(404).json({ success: false, message: 'Lecture not found.' });
+      }
+      await Lecture.deleteOne({ _id: lecture._id });
+      await recordActivity(req, 'LECTURE_DELETED', 'Lecture', lecture._id, `Removed lecture "${lecture.title}"`);
+      return res.json({ success: true, message: `Lecture "${lecture.title}" removed.` });
+    } catch (err) {
+      return next(err);
+    }
+  });
 
   app.get('/api/wallet', requireAuth, async (req, res, next) => {
     try {
@@ -4932,19 +5142,19 @@ function registerRoutes() {
         return res.status(503).json({ success: false, message: 'File storage service unavailable.' });
       }
 
-      const category = ['question_file', 'answer_file', 'exam_resource'].includes(req.body.category)
+      const category = ['question_file', 'answer_file', 'exam_resource', 'lecture_file'].includes(req.body.category)
         ? req.body.category
         : 'answer_file';
 
       if (category !== 'answer_file' && req.currentUser.role !== 'admin') {
-        return res.status(403).json({ success: false, message: 'Only administrators can upload question resources.' });
+        return res.status(403).json({ success: false, message: 'Only administrators can upload restricted resources.' });
       }
 
       const parsed = parseAndValidateBase64Upload(
         req.body.data,
         req.body.filename || 'document',
         req.body.mimeType,
-        'document'
+        category === 'lecture_file' ? 'document' : 'document'
       );
 
       const uploadStream = gridFsBucket.openUploadStream(parsed.safeFilename, {
@@ -4969,6 +5179,7 @@ function registerRoutes() {
         mimeType: parsed.mimeType,
         size: parsed.size,
         relatedExam: isValidObjectId(req.body.relatedExam) ? req.body.relatedExam : null,
+        relatedLecture: isValidObjectId(req.body.relatedLecture) ? req.body.relatedLecture : null,
       });
 
       await recordActivity(req, 'FILE_UPLOADED', 'FileMeta', meta._id, `Uploaded ${parsed.safeFilename} (${category})`);
@@ -5001,9 +5212,12 @@ function registerRoutes() {
 
       const isAdmin = req.currentUser.role === 'admin';
       const isOwner = String(meta.uploadedBy) === String(req.currentUser._id);
-      const isExamResource = meta.category === 'question_file' || meta.category === 'exam_resource';
+      const isExamOrLectureResource =
+        meta.category === 'question_file' ||
+        meta.category === 'exam_resource' ||
+        meta.category === 'lecture_file';
 
-      if (!isAdmin && !isOwner && !isExamResource) {
+      if (!isAdmin && !isOwner && !isExamOrLectureResource) {
         return res.status(403).json({ success: false, message: 'Not authorized to download this file.' });
       }
 

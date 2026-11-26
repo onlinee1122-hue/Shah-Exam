@@ -2061,6 +2061,7 @@
                   { view: 'departments', icon: 'fa-sitemap', text: 'Departments & Courses' },
                   { view: 'batches', icon: 'fa-layer-group', text: 'Batches' },
                   { view: 'examinations', icon: 'fa-file-signature', text: 'Examinations' },
+                  { view: 'lectures', icon: 'fa-photo-film', text: 'Lectures & Materials' },
                   { view: 'questions', icon: 'fa-circle-question', text: 'Question Bank' },
                   { view: 'submissions', icon: 'fa-clipboard-check', text: 'Submissions & Grading' },
                   { view: 'results', icon: 'fa-award', text: 'Results' },
@@ -2091,6 +2092,7 @@
               {
                 label: 'Academics',
                 items: [
+                  { view: 'lectures', icon: 'fa-photo-film', text: 'Lectures & Materials' },
                   { view: 'examinations', icon: 'fa-file-pen', text: 'Examinations' },
                   { view: 'submissions', icon: 'fa-list-check', text: 'My Submissions' },
                   { view: 'results', icon: 'fa-award', text: 'Published Results' },
@@ -2173,6 +2175,9 @@
               break;
             case 'examinations':
               await this.loadExaminations();
+              break;
+            case 'lectures':
+              await this.loadLectures();
               break;
             case 'questions':
               await this.loadQuestions(params.examId || '', params.course || '', params.batchNumber || '');
@@ -3510,6 +3515,422 @@
           } catch (err) {
             this.showToast(err.message, 'error');
           }
+        });
+      },
+
+      // ---------------- 2D. LECTURES & STUDY MATERIALS ----------------
+      async loadLectures(selectedDept = '', selectedCourse = '', selectedBatch = '') {
+        const isAdmin = this.user && this.user.role === 'admin';
+        this.setPageMeta(
+          'Academics',
+          'Lectures & Study Materials',
+          isAdmin ? `<button class="btn btn-primary btn-sm" onclick="App.openCreateLectureModal()"><i class="fa-solid fa-plus"></i> Upload New Lecture</button>` : ''
+        );
+
+        const [depts, batches] = await Promise.all([
+          this.ensureDepartments(true),
+          this.ensureBatches(true),
+        ]);
+
+        const queryParams = new URLSearchParams();
+        if (selectedDept) queryParams.set('department', selectedDept);
+        if (selectedCourse) queryParams.set('course', selectedCourse);
+        if (!isAdmin && this.user.batchNumber) {
+          queryParams.set('batchNumber', this.user.batchNumber);
+        } else if (selectedBatch) {
+          queryParams.set('batchNumber', selectedBatch);
+        }
+
+        let lectures = [];
+        try {
+          const res = await this.api(`/api/lectures?${queryParams.toString()}`);
+          lectures = res.lectures || [];
+        } catch (_err) {
+          lectures = [];
+        }
+
+        document.getElementById('appContent').innerHTML = `
+          <div class="card" style="margin-bottom:16px;">
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+              <div style="flex:1;min-width:180px;">
+                <label class="form-label" style="font-size:11.5px;">Filter Department</label>
+                <select id="lecDeptFilter" class="form-control">
+                  <option value="">All Departments</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}" ${selectedDept === d.name ? 'selected' : ''}>${this.esc(d.name)}</option>`).join('')}
+                </select>
+              </div>
+              <div style="flex:1;min-width:180px;">
+                <label class="form-label" style="font-size:11.5px;">Filter Course</label>
+                <select id="lecCourseFilter" class="form-control">
+                  <option value="">All Courses</option>
+                </select>
+              </div>
+              ${isAdmin ? `
+              <div style="flex:1;min-width:180px;">
+                <label class="form-label" style="font-size:11.5px;">Filter Batch</label>
+                <select id="lecBatchFilter" class="form-control">
+                  <option value="">All Batches</option>
+                  ${batches.map((b) => `<option value="${this.esc(b.batchNumber)}" ${selectedBatch === b.batchNumber ? 'selected' : ''}>${this.esc(b.batchNumber)}</option>`).join('')}
+                </select>
+              </div>` : `
+              <div style="flex:1;min-width:180px;">
+                <label class="form-label" style="font-size:11.5px;">Enrolled Batch</label>
+                <input class="form-control" value="${this.esc(this.user.batchNumber || 'None')}" disabled />
+              </div>`}
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(320px, 1fr));gap:16px;">
+            ${lectures.length ? lectures.map((l) => `
+              <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;margin-bottom:0;">
+                <div>
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+                    <div>
+                      <span class="badge ${l.type === 'video_upload' ? 'badge-blue' : l.type === 'video_link' ? 'badge-orange' : l.type === 'pdf_document' ? 'badge-teal' : 'badge-green'}">${this.esc(l.type.replace('_', ' ').toUpperCase())}</span>
+                      <h3 style="margin-top:6px;font-size:16px;font-weight:600;">${this.esc(l.title)}</h3>
+                    </div>
+                    <span class="badge badge-muted">${this.esc(l.code || 'LECTURE')}</span>
+                  </div>
+                  <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">${this.esc(l.description || 'No description provided.')}</p>
+                  <div style="font-size:12.5px;color:var(--text-main);display:flex;flex-direction:column;gap:4px;margin-bottom:12px;">
+                    <div><i class="fa-solid fa-sitemap" style="width:16px;color:var(--theme);"></i> Department: <strong>${this.esc(l.department || 'General')}</strong></div>
+                    <div><i class="fa-solid fa-book" style="width:16px;color:var(--theme);"></i> Course: <strong>${this.esc(l.course || 'General')}</strong></div>
+                    <div><i class="fa-solid fa-layer-group" style="width:16px;color:var(--theme);"></i> Batch Number: <strong style="color:var(--orange);">${this.esc(l.batchNumber || 'All Batches')}</strong></div>
+                    ${l.durationMinutes ? `<div><i class="fa-solid fa-clock" style="width:16px;color:var(--theme);"></i> Duration: ${l.durationMinutes} minutes</div>` : ''}
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;border-top:1px solid var(--border);padding-top:12px;margin-top:auto;">
+                  <button type="button" class="btn btn-primary btn-sm" style="flex:1;" data-view-lecture="${this.esc(l._id)}"><i class="fa-solid fa-play"></i> View / Play</button>
+                  ${l.fileMetaId ? `<button type="button" class="btn btn-outline btn-sm" onclick="App.downloadWithAuth('/api/files/${this.esc(l.fileMetaId)}', '${this.esc(l.filename || 'lecture_file')}')" title="Download Material"><i class="fa-solid fa-download"></i></button>` : ''}
+                  ${isAdmin ? `
+                    <button type="button" class="btn btn-outline btn-sm" data-edit-lecture="${this.esc(l._id)}" title="Edit Lecture"><i class="fa-solid fa-pen"></i></button>
+                    <button type="button" class="btn btn-danger btn-sm" data-del-lecture="${this.esc(l._id)}" title="Remove Lecture"><i class="fa-solid fa-trash"></i></button>
+                  ` : ''}
+                </div>
+              </div>
+            `).join('') : `<div class="card" style="grid-column:1/-1;"><div class="empty-state"><i class="fa-solid fa-photo-film" style="font-size:36px;color:var(--text-muted);margin-bottom:10px;"></i><h3>No Lectures Found</h3><p>No video lectures or study materials match your current department, course, or batch filters.</p></div></div>`}
+          </div>
+        `;
+
+        const deptFilterEl = document.getElementById('lecDeptFilter');
+        const courseFilterEl = document.getElementById('lecCourseFilter');
+        const batchFilterEl = document.getElementById('lecBatchFilter');
+
+        const syncFilterCourses = () => {
+          const dept = depts.find((d) => d.name === deptFilterEl.value);
+          const list = dept ? (dept.courses || []) : depts.flatMap((d) => d.courses || []);
+          courseFilterEl.innerHTML = `<option value="">All Courses</option>` +
+            list.map((c) => `<option value="${this.esc(c.title)}" ${selectedCourse === c.title ? 'selected' : ''}>${this.esc(c.title)}</option>`).join('');
+        };
+        syncFilterCourses();
+        deptFilterEl.value = selectedDept;
+        courseFilterEl.value = selectedCourse;
+
+        const triggerFilter = () => {
+          this.loadLectures(
+            deptFilterEl.value,
+            courseFilterEl.value,
+            isAdmin && batchFilterEl ? batchFilterEl.value : selectedBatch
+          );
+        };
+
+        deptFilterEl.addEventListener('change', () => {
+          syncFilterCourses();
+          triggerFilter();
+        });
+        courseFilterEl.addEventListener('change', triggerFilter);
+        if (batchFilterEl) batchFilterEl.addEventListener('change', triggerFilter);
+
+        const container = document.getElementById('appContent');
+        container.querySelectorAll('[data-view-lecture]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const lec = lectures.find((l) => String(l._id) === btn.getAttribute('data-view-lecture'));
+            if (lec) this.viewLecturePlayer(lec);
+          });
+        });
+        if (isAdmin) {
+          container.querySelectorAll('[data-edit-lecture]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const lec = lectures.find((l) => String(l._id) === btn.getAttribute('data-edit-lecture'));
+              if (lec) this.openEditLectureModal(lec);
+            });
+          });
+          container.querySelectorAll('[data-del-lecture]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const lec = lectures.find((l) => String(l._id) === btn.getAttribute('data-del-lecture'));
+              if (lec) this.deleteLecture(lec);
+            });
+          });
+        }
+      },
+
+      async openCreateLectureModal() {
+        const [depts, batches] = await Promise.all([
+          this.ensureDepartments(true),
+          this.ensureBatches(true),
+        ]);
+
+        this.showModal('Upload New Lecture / Material', `
+          <form id="createLectureForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Lecture Title</label><input id="clTitle" class="form-control" placeholder="e.g. Introduction to SQL Joins" required /></div>
+              <div class="form-group"><label class="form-label">Lecture Code</label><input id="clCode" class="form-control" placeholder="LEC-01" required /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Department</label>
+                <select id="clDept" class="form-control" required>
+                  <option value="">-- Select Department --</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Course</label>
+                <select id="clCourse" class="form-control" required></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Batch Number</label>
+                <select id="clBatch" class="form-control" required>
+                  <option value="">-- Select Batch Number --</option>
+                  ${batches.filter((b) => b.status === 'active').map((b) => `<option value="${this.esc(b.batchNumber)}">${this.esc(b.batchNumber)} — ${this.esc(b.course || b.department || 'General')} (${this.esc(b.studyOption || 'Any')})</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Lecture Type</label>
+                <select id="clType" class="form-control" required>
+                  <option value="video_upload">Uploaded Video File</option>
+                  <option value="video_link">External Video Link (YouTube / Vimeo)</option>
+                  <option value="pdf_document">PDF Document / Study Notes</option>
+                  <option value="reading">Text Reading Material</option>
+                </select>
+              </div>
+            </div>
+            <div id="videoUrlGroup" class="form-group hidden">
+              <label class="form-label">Video URL (YouTube embed or MP4 link)</label>
+              <input id="clVideoUrl" class="form-control" placeholder="https://www.youtube.com/embed/..." />
+            </div>
+            <div id="fileUploadGroup" class="form-group">
+              <label class="form-label">Upload Video / PDF File (Max 5MB)</label>
+              <input id="clFile" type="file" accept="video/mp4,video/webm,application/pdf,image/*" class="form-control" />
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Duration (Minutes)</label><input id="clDur" type="number" min="1" max="600" class="form-control" value="45" /></div>
+              <div class="form-group"><label class="form-label">Sequence Order</label><input id="clOrder" type="number" min="1" class="form-control" value="1" /></div>
+            </div>
+            <div class="form-group"><label class="form-label">Description / Summary</label><textarea id="clDesc" class="form-control" placeholder="Key topics covered in this lecture..."></textarea></div>
+            <button type="submit" class="btn btn-primary btn-block">Publish Lecture</button>
+          </form>
+        `);
+
+        const deptEl = document.getElementById('clDept');
+        const courseEl = document.getElementById('clCourse');
+        const typeEl = document.getElementById('clType');
+        const videoUrlGroup = document.getElementById('videoUrlGroup');
+        const fileUploadGroup = document.getElementById('fileUploadGroup');
+
+        const syncCourses = () => {
+          const dept = depts.find((d) => d.name === deptEl.value);
+          const courses = dept && dept.courses ? dept.courses : [];
+          courseEl.innerHTML = courses.map((c) => `<option value="${this.esc(c.title)}">${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('');
+        };
+        if (depts.length) deptEl.value = depts[0].name;
+        syncCourses();
+        deptEl.addEventListener('change', syncCourses);
+
+        typeEl.addEventListener('change', () => {
+          const val = typeEl.value;
+          videoUrlGroup.classList.toggle('hidden', val !== 'video_link');
+          fileUploadGroup.classList.toggle('hidden', val === 'video_link' || val === 'reading');
+        });
+
+        document.getElementById('createLectureForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const fileInput = document.getElementById('clFile');
+            let fileData = null;
+            let filename = null;
+            if (fileInput.files && fileInput.files[0] && typeEl.value !== 'video_link' && typeEl.value !== 'reading') {
+              const file = fileInput.files[0];
+              const base64Res = await this.fileToBase64(file);
+              fileData = base64Res;
+              filename = file.name;
+            }
+
+            const res = await this.api('/api/lectures', {
+              method: 'POST',
+              body: {
+                title: document.getElementById('clTitle').value,
+                code: document.getElementById('clCode').value,
+                department: deptEl.value,
+                course: courseEl.value,
+                batchNumber: document.getElementById('clBatch').value,
+                type: typeEl.value,
+                videoUrl: document.getElementById('clVideoUrl').value,
+                fileData,
+                filename,
+                durationMinutes: Number(document.getElementById('clDur').value) || 0,
+                order: Number(document.getElementById('clOrder').value) || 1,
+                description: document.getElementById('clDesc').value,
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            this.loadLectures();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async openEditLectureModal(lecture) {
+        const [depts, batches] = await Promise.all([
+          this.ensureDepartments(true),
+          this.ensureBatches(true),
+        ]);
+
+        this.showModal(`Edit Lecture — ${lecture.title}`, `
+          <form id="editLectureForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Lecture Title</label><input id="elTitle" class="form-control" value="${this.esc(lecture.title)}" required /></div>
+              <div class="form-group"><label class="form-label">Lecture Code</label><input id="elCode" class="form-control" value="${this.esc(lecture.code)}" required /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Department</label>
+                <select id="elDept" class="form-control" required>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}" ${lecture.department === d.name ? 'selected' : ''}>${this.esc(d.name)}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Course</label>
+                <select id="elCourse" class="form-control" required></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Batch Number</label>
+                <select id="elBatch" class="form-control" required>
+                  ${batches.map((b) => `<option value="${this.esc(b.batchNumber)}" ${lecture.batchNumber === b.batchNumber ? 'selected' : ''}>${this.esc(b.batchNumber)} (${this.esc(b.course || 'General')})</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Status</label>
+                <select id="elStatus" class="form-control">
+                  <option value="published" ${lecture.status === 'published' ? 'selected' : ''}>Published</option>
+                  <option value="archived" ${lecture.status === 'archived' ? 'selected' : ''}>Archived</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group"><label class="form-label">Video URL</label><input id="elVideoUrl" class="form-control" value="${this.esc(lecture.videoUrl || '')}" /></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Duration (Minutes)</label><input id="elDur" type="number" min="1" class="form-control" value="${lecture.durationMinutes || 0}" /></div>
+              <div class="form-group"><label class="form-label">Sequence Order</label><input id="elOrder" type="number" min="1" class="form-control" value="${lecture.order || 1}" /></div>
+            </div>
+            <div class="form-group"><label class="form-label">Description</label><textarea id="elDesc" class="form-control">${this.esc(lecture.description || '')}</textarea></div>
+            <button type="submit" class="btn btn-primary btn-block">Update Lecture</button>
+          </form>
+        `);
+
+        const deptEl = document.getElementById('elDept');
+        const courseEl = document.getElementById('elCourse');
+        const syncCourses = (prefer = '') => {
+          const dept = depts.find((d) => d.name === deptEl.value);
+          const courses = dept && dept.courses ? dept.courses : [];
+          courseEl.innerHTML = courses.map((c) => `<option value="${this.esc(c.title)}" ${c.title === prefer ? 'selected' : ''}>${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('');
+          if (prefer) courseEl.value = prefer;
+        };
+        syncCourses(lecture.course || '');
+        deptEl.addEventListener('change', () => syncCourses(''));
+
+        document.getElementById('editLectureForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const res = await this.api(`/api/lectures/${lecture._id}`, {
+              method: 'PUT',
+              body: {
+                title: document.getElementById('elTitle').value,
+                code: document.getElementById('elCode').value,
+                department: deptEl.value,
+                course: courseEl.value,
+                batchNumber: document.getElementById('elBatch').value,
+                status: document.getElementById('elStatus').value,
+                videoUrl: document.getElementById('elVideoUrl').value,
+                durationMinutes: Number(document.getElementById('elDur').value) || 0,
+                order: Number(document.getElementById('elOrder').value) || 1,
+                description: document.getElementById('elDesc').value,
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            this.loadLectures();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async deleteLecture(lecture) {
+        this.showModal('Confirm Lecture Removal', `
+          <p style="margin-bottom:16px;">Remove lecture <strong>${this.esc(lecture.title)}</strong>?</p>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button class="btn btn-outline" onclick="App.closeModal()">Cancel</button>
+            <button class="btn btn-danger" id="confirmDelLecBtn">Remove</button>
+          </div>
+        `);
+        document.getElementById('confirmDelLecBtn').addEventListener('click', async () => {
+          try {
+            const res = await this.api(`/api/lectures/${lecture._id}`, { method: 'DELETE' });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            this.loadLectures();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async viewLecturePlayer(lecture) {
+        let mediaHtml = '';
+        if (lecture.type === 'video_upload' && lecture.fileMetaId) {
+          mediaHtml = `<video controls autoplay style="width:100%;max-height:420px;border-radius:8px;background:#000;"><source src="/api/files/${lecture.fileMetaId}" type="video/mp4">Your browser does not support video playback.</video>`;
+        } else if (lecture.type === 'video_link' && lecture.videoUrl) {
+          mediaHtml = `<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:8px;"><iframe src="${this.esc(lecture.videoUrl)}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`;
+        } else if (lecture.type === 'pdf_document' && lecture.fileMetaId) {
+          mediaHtml = `
+            <div style="text-align:center;padding:20px;">
+              <i class="fa-solid fa-file-pdf" style="font-size:48px;color:var(--red);margin-bottom:10px;"></i>
+              <p style="margin-bottom:14px;font-weight:500;">PDF Document / Study Material</p>
+              <div style="display:flex;justify-content:center;gap:10px;">
+                <button class="btn btn-primary" onclick="App.downloadWithAuth('/api/files/${this.esc(lecture.fileMetaId)}', '${this.esc(lecture.filename || 'lecture.pdf')}')"><i class="fa-solid fa-download"></i> Download PDF Document</button>
+              </div>
+            </div>
+          `;
+        } else {
+          mediaHtml = `<div style="padding:20px;background:var(--bg);border-radius:8px;"><p style="white-space:pre-wrap;">${this.esc(lecture.description || 'No reading content provided.')}</p></div>`;
+        }
+
+        this.showModal(`${lecture.code}: ${lecture.title}`, `
+          <div style="margin-bottom:14px;">
+            <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+              <span class="badge badge-blue"><i class="fa-solid fa-sitemap"></i> ${this.esc(lecture.department)}</span>
+              <span class="badge badge-teal"><i class="fa-solid fa-book"></i> ${this.esc(lecture.course)}</span>
+              <span class="badge badge-orange"><i class="fa-solid fa-layer-group"></i> Batch: ${this.esc(lecture.batchNumber)}</span>
+              ${lecture.durationMinutes ? `<span class="badge badge-green"><i class="fa-solid fa-clock"></i> ${lecture.durationMinutes} mins</span>` : ''}
+            </div>
+            <p style="font-size:13.5px;color:var(--text-muted);margin-bottom:14px;">${this.esc(lecture.description || '')}</p>
+          </div>
+          ${mediaHtml}
+        `, 'max-width:800px;');
+      },
+
+      async fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = (error) => reject(error);
         });
       },
 
