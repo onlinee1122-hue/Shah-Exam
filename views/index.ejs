@@ -1437,6 +1437,35 @@
       examTimerInterval: null,
       activeExamState: null,
       studentPage: 1,
+      departments: [],
+
+      async loadPublicDepartments() {
+        try {
+          const res = await this.api('/api/departments/public');
+          if (res && Array.isArray(res.departments) && res.departments.length) {
+            this.departments = res.departments;
+            const regSelect = document.getElementById('regDepartment');
+            if (regSelect) {
+              regSelect.innerHTML = res.departments
+                .map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`)
+                .join('');
+            }
+          }
+        } catch (_err) {
+          // keep default options if unauthenticated fetch fails
+        }
+      },
+
+      async ensureDepartments(force = false) {
+        if (!force && this.departments && this.departments.length) return this.departments;
+        try {
+          const res = await this.api('/api/departments');
+          this.departments = res.departments || [];
+        } catch (_err) {
+          this.departments = this.departments || [];
+        }
+        return this.departments;
+      },
 
       esc(str) {
         if (str === null || str === undefined) return '';
@@ -1625,6 +1654,7 @@
 
       async init() {
         this.bindGlobalEvents();
+        this.loadPublicDepartments();
         const urlParams = new URLSearchParams(window.location.search);
         const resetToken = urlParams.get('resetToken');
         if (resetToken) {
@@ -1952,6 +1982,7 @@
               {
                 label: 'Academics',
                 items: [
+                  { view: 'departments', icon: 'fa-sitemap', text: 'Departments & Courses' },
                   { view: 'examinations', icon: 'fa-file-signature', text: 'Examinations' },
                   { view: 'questions', icon: 'fa-circle-question', text: 'Question Bank' },
                   { view: 'submissions', icon: 'fa-clipboard-check', text: 'Submissions & Grading' },
@@ -2055,11 +2086,14 @@
             case 'students':
               await this.loadStudents();
               break;
+            case 'departments':
+              await this.loadDepartments();
+              break;
             case 'examinations':
               await this.loadExaminations();
               break;
             case 'questions':
-              await this.loadQuestions(params.examId);
+              await this.loadQuestions(params.examId || '', params.course || '', params.batchNumber || '');
               break;
             case 'take-exam':
               await this.loadTakeExam(params.examId);
@@ -2414,7 +2448,10 @@
         if (status) q.set('status', status);
         if (department) q.set('department', department);
 
-        const data = await this.api(`/api/students?${q.toString()}`);
+        const [data, depts] = await Promise.all([
+          this.api(`/api/students?${q.toString()}`),
+          this.ensureDepartments(),
+        ]);
 
         document.getElementById('appContent').innerHTML = `
           <div class="card">
@@ -2428,10 +2465,7 @@
                 </select>
                 <select id="stuDept" class="form-control" style="max-width:190px;">
                   <option value="">All Departments</option>
-                  <option value="Computer Science" ${department === 'Computer Science' ? 'selected' : ''}>Computer Science</option>
-                  <option value="Data Science" ${department === 'Data Science' ? 'selected' : ''}>Data Science</option>
-                  <option value="Cybersecurity" ${department === 'Cybersecurity' ? 'selected' : ''}>Cybersecurity</option>
-                  <option value="Business Analytics" ${department === 'Business Analytics' ? 'selected' : ''}>Business Analytics</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}" ${department === d.name ? 'selected' : ''}>${this.esc(d.name)}</option>`).join('')}
                 </select>
                 <button class="btn btn-primary btn-sm" id="stuFilterBtn"><i class="fa-solid fa-magnifying-glass"></i> Filter</button>
               </div>
@@ -2492,7 +2526,8 @@
         });
       },
 
-      openCreateStudentModal() {
+      async openCreateStudentModal() {
+        const depts = await this.ensureDepartments();
         this.showModal('Register New Student', `
           <form id="createStudentForm">
             <div class="form-row">
@@ -2500,7 +2535,12 @@
               <div class="form-group"><label class="form-label">Email</label><input id="csEmail" type="email" class="form-control" required /></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label class="form-label">Department</label><input id="csDept" class="form-control" value="Computer Science" /></div>
+              <div class="form-group">
+                <label class="form-label">Department</label>
+                <select id="csDept" class="form-control">
+                  ${depts.length ? depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)}</option>`).join('') : '<option value="Computer Science">Computer Science</option>'}
+                </select>
+              </div>
               <div class="form-group"><label class="form-label">Initial Wallet ($)</label><input id="csWallet" type="number" min="0" step="0.01" class="form-control" value="250" /></div>
             </div>
             <div class="form-group"><label class="form-label">Temporary Password (min 8 chars, A-z &amp; 0-9)</label><input id="csPassword" type="password" class="form-control" required /></div>
@@ -2716,7 +2756,259 @@
         `;
       },
 
-      openCreateExamModal() {
+      // ---------------- 2B. DEPARTMENTS & COURSES (ADMIN) ----------------
+      async loadDepartments() {
+        this.setPageMeta(
+          'Academics',
+          'Departments & Courses',
+          `<button class="btn btn-orange btn-sm" onclick="App.openCreateDepartmentModal()"><i class="fa-solid fa-plus"></i> Create New Department</button>`
+        );
+        const depts = await this.ensureDepartments(true);
+
+        document.getElementById('appContent').innerHTML = `
+          <div style="display:grid;gap:18px;">
+            ${depts.length ? depts.map((dept) => `
+              <div class="card">
+                <div class="card-header" style="flex-wrap:wrap;gap:10px;">
+                  <div>
+                    <div class="card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                      <i class="fa-solid fa-building-columns" style="color:var(--theme-light);"></i>
+                      <span>${this.esc(dept.name)}</span>
+                      <span class="badge badge-blue">${this.esc(dept.code)}</span>
+                      <span class="badge ${dept.status === 'active' ? 'badge-green' : 'badge-muted'}">${this.esc(dept.status)}</span>
+                    </div>
+                    ${dept.description ? `<p style="font-size:12.5px;color:var(--text-muted);margin-top:4px;">${this.esc(dept.description)}</p>` : ''}
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-teal btn-sm" data-add-course-dept="${this.esc(dept._id)}"><i class="fa-solid fa-plus"></i> Add Course</button>
+                    <button type="button" class="btn btn-danger btn-sm" data-del-dept="${this.esc(dept._id)}"><i class="fa-solid fa-trash"></i></button>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Course Code</th><th>Course Title</th><th>Credits</th><th>Study Options</th><th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${(dept.courses && dept.courses.length) ? dept.courses.map((c) => `
+                        <tr>
+                          <td><strong>${this.esc(c.code)}</strong></td>
+                          <td>${this.esc(c.title)}</td>
+                          <td>${c.credits || 3}</td>
+                          <td>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                              ${(c.studyOptions || []).map((opt) => `<span class="badge badge-teal">${this.esc(opt)}</span>`).join('')}
+                            </div>
+                          </td>
+                          <td>
+                            <button type="button" class="btn btn-danger btn-sm" data-del-course="${this.esc(c._id)}" data-dept-id="${this.esc(dept._id)}" title="Remove Course"><i class="fa-solid fa-trash"></i></button>
+                          </td>
+                        </tr>`).join('') : `<tr><td colspan="5" class="empty-state">No courses added to this department yet.</td></tr>`}
+                    </tbody>
+                  </table>
+                </div>
+              </div>`).join('') : `
+              <div class="card"><div class="empty-state"><i class="fa-solid fa-sitemap"></i><h3>No departments configured</h3><p>Click "Create New Department" to add your first academic department and its courses.</p></div></div>`}
+          </div>
+        `;
+
+        const container = document.getElementById('appContent');
+        container.querySelectorAll('[data-add-course-dept]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const dept = depts.find((d) => String(d._id) === btn.getAttribute('data-add-course-dept'));
+            if (dept) this.openAddCourseModal(dept._id, dept.name);
+          });
+        });
+        container.querySelectorAll('[data-del-dept]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const dept = depts.find((d) => String(d._id) === btn.getAttribute('data-del-dept'));
+            if (dept) this.deleteDepartment(dept._id, dept.name);
+          });
+        });
+        container.querySelectorAll('[data-del-course]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const deptId = btn.getAttribute('data-dept-id');
+            const courseId = btn.getAttribute('data-del-course');
+            const dept = depts.find((d) => String(d._id) === deptId);
+            const course = dept && (dept.courses || []).find((c) => String(c._id) === courseId);
+            this.deleteCourse(deptId, courseId, course ? course.title : 'Course');
+          });
+        });
+      },
+
+      openCreateDepartmentModal() {
+        const studyOptionChoices = ['Full-Time', 'Part-Time', 'Online', 'Hybrid', 'Evening', 'Weekend'];
+        let courseRowCounter = 1;
+
+        const buildCourseRow = (idx) => `
+          <div class="dept-course-row" data-course-row="${idx}" style="border:1px solid var(--border-color);border-radius:8px;padding:12px;margin-bottom:10px;background:#F9FBFD;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <strong style="font-size:12.5px;color:var(--theme-dark);">Course #${idx}</strong>
+              ${idx > 1 ? `<button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dept-course-row').remove()"><i class="fa-solid fa-xmark"></i></button>` : ''}
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Course Code</label><input class="form-control dc-code" placeholder="e.g. AI-101" required /></div>
+              <div class="form-group"><label class="form-label">Course Title</label><input class="form-control dc-title" placeholder="e.g. Applied Machine Learning" required /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Credits</label><input type="number" min="1" max="20" class="form-control dc-credits" value="3" /></div>
+              <div class="form-group"><label class="form-label">Extra Custom Study Option (optional)</label><input class="form-control dc-custom-opt" placeholder="e.g. Self-Paced, Lab Intensive" /></div>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Study Options (select multiple)</label>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                ${studyOptionChoices.map((opt) => `
+                  <label class="checkbox-label" style="font-size:12.5px;">
+                    <input type="checkbox" class="dc-opt-cb" value="${this.esc(opt)}" ${opt === 'Full-Time' ? 'checked' : ''} />
+                    <span>${this.esc(opt)}</span>
+                  </label>`).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+
+        this.showModal('Create New Department & Courses', `
+          <form id="createDeptForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Department Name</label><input id="deptName" class="form-control" placeholder="e.g. Artificial Intelligence" required /></div>
+              <div class="form-group"><label class="form-label">Department Code</label><input id="deptCode" class="form-control" placeholder="e.g. AI" required /></div>
+            </div>
+            <div class="form-group"><label class="form-label">Description</label><textarea id="deptDesc" class="form-control" placeholder="Department overview..."></textarea></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px;">
+              <label class="form-label" style="margin:0;">Department Courses &amp; Study Options</label>
+              <button type="button" class="btn btn-teal btn-sm" id="addMoreCourseRowBtn"><i class="fa-solid fa-plus"></i> Add Another Course</button>
+            </div>
+            <div id="deptCoursesContainer">${buildCourseRow(1)}</div>
+            <button type="submit" class="btn btn-primary btn-block" style="margin-top:8px;">Create Department</button>
+          </form>
+        `, true);
+
+        document.getElementById('addMoreCourseRowBtn').addEventListener('click', () => {
+          courseRowCounter += 1;
+          document.getElementById('deptCoursesContainer').insertAdjacentHTML('beforeend', buildCourseRow(courseRowCounter));
+        });
+
+        document.getElementById('createDeptForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const rows = Array.from(document.querySelectorAll('#deptCoursesContainer .dept-course-row'));
+            const courses = rows.map((row) => {
+              const checked = Array.from(row.querySelectorAll('.dc-opt-cb:checked')).map((cb) => cb.value);
+              const customRaw = row.querySelector('.dc-custom-opt').value || '';
+              const customList = customRaw.split(',').map((s) => s.trim()).filter(Boolean);
+              return {
+                code: row.querySelector('.dc-code').value,
+                title: row.querySelector('.dc-title').value,
+                credits: Number(row.querySelector('.dc-credits').value) || 3,
+                studyOptions: Array.from(new Set([...checked, ...customList])),
+              };
+            });
+
+            const res = await this.api('/api/departments', {
+              method: 'POST',
+              body: {
+                name: document.getElementById('deptName').value,
+                code: document.getElementById('deptCode').value,
+                description: document.getElementById('deptDesc').value,
+                courses,
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureDepartments(true);
+            this.loadDepartments();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      openAddCourseModal(deptId, deptName) {
+        const studyOptionChoices = ['Full-Time', 'Part-Time', 'Online', 'Hybrid', 'Evening', 'Weekend'];
+        this.showModal(`Add Course to ${deptName}`, `
+          <form id="addCourseForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Course Code</label><input id="acCode" class="form-control" placeholder="e.g. CS-450" required /></div>
+              <div class="form-group"><label class="form-label">Course Title</label><input id="acTitle" class="form-control" placeholder="e.g. Distributed Databases" required /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Credits</label><input id="acCredits" type="number" min="1" max="20" class="form-control" value="3" /></div>
+              <div class="form-group"><label class="form-label">Custom Study Options (comma separated)</label><input id="acCustomOpts" class="form-control" placeholder="e.g. Bootcamp, Self-Paced" /></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Study Options (select all offered)</label>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                ${studyOptionChoices.map((opt) => `
+                  <label class="checkbox-label" style="font-size:12.5px;">
+                    <input type="checkbox" class="ac-opt-cb" value="${this.esc(opt)}" ${opt === 'Full-Time' ? 'checked' : ''} />
+                    <span>${this.esc(opt)}</span>
+                  </label>`).join('')}
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Save Course</button>
+          </form>
+        `);
+
+        document.getElementById('addCourseForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const checked = Array.from(document.querySelectorAll('.ac-opt-cb:checked')).map((cb) => cb.value);
+            const customList = (document.getElementById('acCustomOpts').value || '').split(',').map((s) => s.trim()).filter(Boolean);
+            const res = await this.api(`/api/departments/${deptId}/courses`, {
+              method: 'POST',
+              body: {
+                code: document.getElementById('acCode').value,
+                title: document.getElementById('acTitle').value,
+                credits: Number(document.getElementById('acCredits').value) || 3,
+                studyOptions: Array.from(new Set([...checked, ...customList])),
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureDepartments(true);
+            this.loadDepartments();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async deleteCourse(deptId, courseId, title) {
+        try {
+          const res = await this.api(`/api/departments/${deptId}/courses/${courseId}`, { method: 'DELETE' });
+          this.showToast(`Removed course ${title}.`, 'success');
+          await this.ensureDepartments(true);
+          this.loadDepartments();
+        } catch (err) {
+          this.showToast(err.message, 'error');
+        }
+      },
+
+      async deleteDepartment(deptId, name) {
+        this.showModal('Confirm Department Removal', `
+          <p style="margin-bottom:16px;">Remove department <strong>${this.esc(name)}</strong> and its course list?</p>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button class="btn btn-outline" onclick="App.closeModal()">Cancel</button>
+            <button class="btn btn-danger" id="confirmDelDeptBtn">Remove</button>
+          </div>
+        `);
+        document.getElementById('confirmDelDeptBtn').addEventListener('click', async () => {
+          try {
+            const res = await this.api(`/api/departments/${deptId}`, { method: 'DELETE' });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureDepartments(true);
+            this.loadDepartments();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async openCreateExamModal() {
+        const depts = await this.ensureDepartments();
         const defaultDate = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
         this.showModal('Create Examination', `
           <form id="createExamForm">
@@ -2725,31 +3017,89 @@
               <div class="form-group"><label class="form-label">Exam Code</label><input id="exCode" class="form-control" placeholder="CS-402-FIN" required /></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label class="form-label">Course</label><input id="exCourse" class="form-control" required /></div>
+              <div class="form-group">
+                <label class="form-label">Department</label>
+                <select id="exDept" class="form-control">
+                  <option value="">-- Select Department --</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Course</label>
+                <select id="exCourseSelect" class="form-control"></select>
+                <input id="exCourse" class="form-control hidden" style="margin-top:6px;" placeholder="Enter custom course name" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Study Option</label>
+                <select id="exStudyOption" class="form-control">
+                  <option value="Full-Time">Full-Time</option>
+                </select>
+              </div>
+              <div class="form-group"><label class="form-label">Batch Number (Optional)</label><input id="exBatch" class="form-control" placeholder="e.g. BATCH-01" /></div>
+            </div>
+            <div class="form-row">
               <div class="form-group"><label class="form-label">Exam Date</label><input id="exDate" type="date" class="form-control" value="${defaultDate}" required /></div>
-            </div>
-            <div class="form-row">
               <div class="form-group"><label class="form-label">Duration (minutes)</label><input id="exDur" type="number" min="5" max="360" class="form-control" value="45" required /></div>
-              <div class="form-group"><label class="form-label">Status</label><select id="exStatus" class="form-control"><option value="published">Published</option><option value="draft">Draft</option></select></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label class="form-label">Total Marks</label><input id="exTotal" type="number" min="1" class="form-control" value="100" required /></div>
-              <div class="form-group"><label class="form-label">Passing Marks</label><input id="exPass" type="number" min="0" class="form-control" value="50" required /></div>
+              <div class="form-group"><label class="form-label">Status</label><select id="exStatus" class="form-control"><option value="published">Published</option><option value="draft">Draft</option></select></div>
+              <div class="form-group"><label class="form-label">Total / Passing Marks</label>
+                <div style="display:flex;gap:8px;">
+                  <input id="exTotal" type="number" min="1" class="form-control" value="100" required title="Total Marks" />
+                  <input id="exPass" type="number" min="0" class="form-control" value="50" required title="Passing Marks" />
+                </div>
+              </div>
             </div>
             <div class="form-group"><label class="form-label">Description &amp; Instructions</label><textarea id="exDesc" class="form-control" placeholder="Examination scope and rules..."></textarea></div>
             <button type="submit" class="btn btn-primary btn-block">Create Examination</button>
           </form>
         `);
 
+        const deptEl = document.getElementById('exDept');
+        const courseSelEl = document.getElementById('exCourseSelect');
+        const courseInputEl = document.getElementById('exCourse');
+        const studySelEl = document.getElementById('exStudyOption');
+
+        const syncCourses = () => {
+          const dept = depts.find((d) => d.name === deptEl.value);
+          const courses = dept && dept.courses ? dept.courses : [];
+          courseSelEl.innerHTML =
+            courses.map((c) => `<option value="${this.esc(c.title)}">${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('') +
+            `<option value="__custom__">Other / Custom Course...</option>`;
+          syncStudyOptions();
+        };
+        const syncStudyOptions = () => {
+          const isCustom = courseSelEl.value === '__custom__';
+          courseInputEl.classList.toggle('hidden', !isCustom);
+          courseInputEl.required = isCustom;
+          const dept = depts.find((d) => d.name === deptEl.value);
+          const course = dept && dept.courses ? dept.courses.find((c) => c.title === courseSelEl.value) : null;
+          const opts = (course && course.studyOptions && course.studyOptions.length)
+            ? course.studyOptions
+            : ['Full-Time', 'Part-Time', 'Online', 'Hybrid'];
+          studySelEl.innerHTML = opts.map((o) => `<option value="${this.esc(o)}">${this.esc(o)}</option>`).join('');
+        };
+
+        if (depts.length) deptEl.value = depts[0].name;
+        syncCourses();
+        deptEl.addEventListener('change', syncCourses);
+        courseSelEl.addEventListener('change', syncStudyOptions);
+
         document.getElementById('createExamForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           try {
+            const chosenCourse = courseSelEl.value === '__custom__' ? courseInputEl.value : courseSelEl.value;
             const res = await this.api('/api/examinations', {
               method: 'POST',
               body: {
                 title: document.getElementById('exTitle').value,
                 code: document.getElementById('exCode').value,
-                course: document.getElementById('exCourse').value,
+                department: deptEl.value,
+                course: chosenCourse,
+                studyOption: studySelEl.value,
+                batchNumber: document.getElementById('exBatch').value,
                 examDate: document.getElementById('exDate').value,
                 durationMinutes: Number(document.getElementById('exDur').value),
                 totalMarks: Number(document.getElementById('exTotal').value),
@@ -2791,59 +3141,156 @@
         }
       },
 
-      // ---------------- 4. QUESTION BANK (ADMIN) ----------------
-      async loadQuestions(selectedExamId = '') {
+      // ---------------- 4. QUESTION BANK (ADMIN — BATCH NUMBER WISE) ----------------
+      async loadQuestions(selectedExamId = '', selectedCourse = '', selectedBatch = '') {
         this.setPageMeta('Academics', 'Question Bank');
-        const exData = await this.api('/api/examinations');
+        const [exData] = await Promise.all([
+          this.api('/api/examinations'),
+          this.ensureDepartments(),
+        ]);
         const exams = exData.examinations;
         if (!exams.length) {
           document.getElementById('appContent').innerHTML = `<div class="card"><div class="empty-state"><i class="fa-solid fa-file-circle-question"></i><h3>No examinations found</h3><p>Create an examination first to add questions.</p></div></div>`;
           return;
         }
         const examId = selectedExamId || exams[0]._id;
-        const qData = await this.api(`/api/examinations/${examId}/questions`);
+        const currentExam = exams.find((ex) => ex._id === examId) || exams[0];
+        const params = new URLSearchParams();
+        if (selectedCourse) params.set('course', selectedCourse);
+        if (selectedBatch) params.set('batchNumber', selectedBatch);
+        const qs = params.toString();
+        const qData = await this.api(`/api/examinations/${examId}/questions${qs ? `?${qs}` : ''}`);
+        const availableBatches = qData.batches || [];
+        const availableCourses = qData.courses || [];
+
+        // Group saved questions batch-number wise
+        const batchGroups = new Map();
+        for (const q of qData.questions) {
+          const bKey = (q.batchNumber || 'BATCH-01').toUpperCase();
+          if (!batchGroups.has(bKey)) batchGroups.set(bKey, []);
+          batchGroups.get(bKey).push(q);
+        }
+
+        const renderBatchSections = () => {
+          if (!qData.questions.length) {
+            return `<div class="empty-state"><i class="fa-solid fa-circle-question"></i><p>No questions saved for the selected filters yet. Click "+ Add Question" to add questions by batch number.</p></div>`;
+          }
+          return Array.from(batchGroups.entries()).map(([batchNum, items]) => {
+            const batchMarks = items.reduce((sum, it) => sum + (Number(it.marks) || 0), 0);
+            const batchCourses = Array.from(new Set(items.map((it) => it.course || currentExam.course).filter(Boolean))).join(', ');
+            return `
+              <div style="border:1px solid var(--border-color);border-radius:10px;padding:16px;margin-bottom:18px;background:#F7FAFD;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--border-color);">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span class="badge badge-blue" style="font-size:12.5px;padding:5px 12px;"><i class="fa-solid fa-layer-group"></i> Batch: ${this.esc(batchNum)}</span>
+                    ${batchCourses ? `<span class="badge badge-teal"><i class="fa-solid fa-book"></i> ${this.esc(batchCourses)}</span>` : ''}
+                    <span class="badge badge-muted">${items.length} Question${items.length === 1 ? '' : 's'} &bull; ${batchMarks} Marks</span>
+                  </div>
+                  <button type="button" class="btn btn-outline btn-sm" data-add-to-batch="${this.esc(batchNum)}">
+                    <i class="fa-solid fa-plus"></i> Add to ${this.esc(batchNum)}
+                  </button>
+                </div>
+                ${items.map((q, idx) => `
+                  <div class="exam-question-card" style="background:var(--white);margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+                      <div>
+                        <span class="badge badge-blue">Q${idx + 1} &bull; ${this.esc(q.type.toUpperCase())}</span>
+                        <span class="badge badge-green">${q.marks} Marks</span>
+                        <span class="badge badge-orange">Batch ${this.esc(q.batchNumber || batchNum)}</span>
+                        ${q.course ? `<span class="badge badge-teal">${this.esc(q.course)}</span>` : ''}
+                        ${q.studyOption ? `<span class="badge badge-muted">${this.esc(q.studyOption)}</span>` : ''}
+                        <span class="badge badge-muted">${this.esc(q.category)}</span>
+                        <h4 style="margin-top:8px;font-size:14.5px;">${this.esc(q.prompt)}</h4>
+                      </div>
+                      <button class="btn btn-danger btn-sm" onclick="App.deleteQuestion('${this.esc(q._id)}', '${this.esc(examId)}')"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    ${q.options && q.options.length ? `<ul style="margin:10px 0 6px 20px;font-size:13px;">${q.options.map((o) => `<li><strong>${this.esc(o.label)}:</strong> ${this.esc(o.text)}</li>`).join('')}</ul>` : ''}
+                    <div style="font-size:12.5px;color:var(--green);margin-top:6px;"><strong>Answer Key:</strong> ${this.esc(q.correctAnswer)}</div>
+                    ${q.attachmentFileId ? `<div style="margin-top:6px;"><button type="button" onclick="App.downloadWithAuth('/api/files/${this.esc(q.attachmentFileId)}', '${this.esc(q.attachmentName || 'attachment')}')" class="btn btn-outline btn-sm"><i class="fa-solid fa-paperclip"></i> ${this.esc(q.attachmentName || 'Attachment')}</button></div>` : ''}
+                  </div>`).join('')}
+              </div>`;
+          }).join('');
+        };
 
         document.getElementById('appContent').innerHTML = `
           <div class="card">
             <div class="toolbar">
               <div class="toolbar-filters">
-                <label class="form-label" style="margin:0;">Select Examination:</label>
-                <select id="qbExamSelect" class="form-control" style="max-width:340px;">
+                <select id="qbExamSelect" class="form-control" style="max-width:290px;" title="Examination">
                   ${exams.map((ex) => `<option value="${this.esc(ex._id)}" ${ex._id === examId ? 'selected' : ''}>${this.esc(ex.code)} — ${this.esc(ex.title)}</option>`).join('')}
+                </select>
+                <select id="qbCourseFilter" class="form-control" style="max-width:220px;" title="Filter by Course">
+                  <option value="">All Courses</option>
+                  ${availableCourses.map((c) => `<option value="${this.esc(c)}" ${selectedCourse === c ? 'selected' : ''}>${this.esc(c)}</option>`).join('')}
+                </select>
+                <select id="qbBatchFilter" class="form-control" style="max-width:180px;" title="Filter by Batch Number">
+                  <option value="">All Batches</option>
+                  ${availableBatches.map((b) => `<option value="${this.esc(b)}" ${selectedBatch === b ? 'selected' : ''}>Batch: ${this.esc(b)}</option>`).join('')}
                 </select>
               </div>
               <button class="btn btn-primary btn-sm" id="addQuestionBtn"><i class="fa-solid fa-plus"></i> Add Question</button>
             </div>
 
-            ${qData.questions.length ? qData.questions.map((q, idx) => `
-              <div class="exam-question-card">
-                <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
-                  <div>
-                    <span class="badge badge-blue">Q${idx + 1} &bull; ${this.esc(q.type.toUpperCase())}</span>
-                    <span class="badge badge-green">${q.marks} Marks</span>
-                    <span class="badge badge-muted">${this.esc(q.category)}</span>
-                    <h4 style="margin-top:8px;font-size:14.5px;">${this.esc(q.prompt)}</h4>
-                  </div>
-                  <button class="btn btn-danger btn-sm" onclick="App.deleteQuestion('${this.esc(q._id)}', '${this.esc(examId)}')"><i class="fa-solid fa-trash"></i></button>
-                </div>
-                ${q.options && q.options.length ? `<ul style="margin:10px 0 6px 20px;font-size:13px;">${q.options.map((o) => `<li><strong>${this.esc(o.label)}:</strong> ${this.esc(o.text)}</li>`).join('')}</ul>` : ''}
-                <div style="font-size:12.5px;color:var(--green);margin-top:6px;"><strong>Answer Key:</strong> ${this.esc(q.correctAnswer)}</div>
-                ${q.attachmentFileId ? `<div style="margin-top:6px;"><button type="button" onclick="App.downloadWithAuth('/api/files/${this.esc(q.attachmentFileId)}', '${this.esc(q.attachmentName || 'attachment')}')" class="btn btn-outline btn-sm"><i class="fa-solid fa-paperclip"></i> ${this.esc(q.attachmentName || 'Attachment')}</button></div>` : ''}
-              </div>`).join('') : `<div class="empty-state"><i class="fa-solid fa-circle-question"></i><p>No questions added to this examination yet.</p></div>`}
+            ${renderBatchSections()}
           </div>
         `;
 
         document.getElementById('qbExamSelect').addEventListener('change', (e) => {
-          this.loadQuestions(e.target.value);
+          this.loadQuestions(e.target.value, '', '');
+        });
+        document.getElementById('qbCourseFilter').addEventListener('change', (e) => {
+          this.loadQuestions(examId, e.target.value, document.getElementById('qbBatchFilter').value);
+        });
+        document.getElementById('qbBatchFilter').addEventListener('change', (e) => {
+          this.loadQuestions(examId, document.getElementById('qbCourseFilter').value, e.target.value);
         });
         document.getElementById('addQuestionBtn').addEventListener('click', () => {
-          this.openAddQuestionModal(examId);
+          this.openAddQuestionModal(examId, currentExam, availableBatches);
+        });
+        document.querySelectorAll('[data-add-to-batch]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            this.openAddQuestionModal(examId, currentExam, availableBatches, btn.getAttribute('data-add-to-batch'));
+          });
         });
       },
 
-      openAddQuestionModal(examId) {
-        this.showModal('Add Question to Examination', `
+      async openAddQuestionModal(examId, examObj = null, existingBatches = [], presetBatch = '') {
+        const depts = await this.ensureDepartments();
+        const defaultBatch = presetBatch || (examObj && examObj.batchNumber) || existingBatches[0] || 'BATCH-01';
+        const batchListId = 'qBatchSuggestions';
+
+        this.showModal('Add Question (Course & Batch Wise)', `
           <form id="addQuestionForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Department</label>
+                <select id="qDept" class="form-control">
+                  <option value="">-- All / Custom --</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Selected Course</label>
+                <select id="qCourseSelect" class="form-control"></select>
+                <input id="qCourseCustom" class="form-control hidden" style="margin-top:6px;" placeholder="Enter course name" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Study Option</label>
+                <select id="qStudyOption" class="form-control"></select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Batch Number (for selected course)</label>
+                <input id="qBatchNumber" list="${batchListId}" class="form-control" value="${this.esc(defaultBatch)}" placeholder="e.g. BATCH-01 or B-2026-A" required />
+                <datalist id="${batchListId}">
+                  ${existingBatches.map((b) => `<option value="${this.esc(b)}"></option>`).join('')}
+                  <option value="BATCH-01"></option>
+                  <option value="BATCH-02"></option>
+                  <option value="BATCH-03"></option>
+                </datalist>
+              </div>
+            </div>
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">Question Type</label>
@@ -2855,7 +3302,7 @@
               </div>
               <div class="form-group"><label class="form-label">Marks</label><input id="qMarks" type="number" min="1" class="form-control" value="10" required /></div>
             </div>
-            <div class="form-group"><label class="form-label">Category</label><input id="qCat" class="form-control" value="Core Concepts" /></div>
+            <div class="form-group"><label class="form-label">Category / Topic</label><input id="qCat" class="form-control" value="Core Concepts" /></div>
             <div class="form-group"><label class="form-label">Question Prompt</label><textarea id="qPrompt" class="form-control" required></textarea></div>
             <div id="mcqOptionsWrap">
               <div class="form-row">
@@ -2875,9 +3322,69 @@
               <label class="form-label">Optional Reference File (PDF/Image, max 5MB)</label>
               <input id="qFile" type="file" class="form-control" />
             </div>
-            <button type="submit" class="btn btn-primary btn-block">Save Question</button>
+            <button type="submit" class="btn btn-primary btn-block">Save Question to Batch</button>
           </form>
-        `);
+        `, true);
+
+        const qDeptEl = document.getElementById('qDept');
+        const qCourseSelEl = document.getElementById('qCourseSelect');
+        const qCourseCustomEl = document.getElementById('qCourseCustom');
+        const qStudyEl = document.getElementById('qStudyOption');
+
+        const findMatchedDeptForExam = () => {
+          if (examObj && examObj.department) {
+            const byName = depts.find((d) => d.name === examObj.department);
+            if (byName) return byName;
+          }
+          if (examObj && examObj.course) {
+            const byCourse = depts.find((d) => (d.courses || []).some((c) => c.title.toLowerCase() === examObj.course.toLowerCase()));
+            if (byCourse) return byCourse;
+          }
+          return depts[0] || null;
+        };
+
+        const syncQCourses = (preferCourse = '') => {
+          const dept = depts.find((d) => d.name === qDeptEl.value);
+          const courses = dept && dept.courses ? dept.courses : depts.flatMap((d) => d.courses || []);
+          const uniqueTitles = [];
+          const seen = new Set();
+          for (const c of courses) {
+            if (!seen.has(c.title)) {
+              seen.add(c.title);
+              uniqueTitles.push(c);
+            }
+          }
+          if (preferCourse && !seen.has(preferCourse)) {
+            uniqueTitles.unshift({ code: 'EXAM', title: preferCourse, studyOptions: ['Full-Time', 'Part-Time', 'Online'] });
+          }
+          qCourseSelEl.innerHTML =
+            uniqueTitles.map((c) => `<option value="${this.esc(c.title)}">${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('') +
+            `<option value="__custom__">Other / Custom Course...</option>`;
+          if (preferCourse) qCourseSelEl.value = preferCourse;
+          syncQStudy();
+        };
+
+        const syncQStudy = () => {
+          const isCustom = qCourseSelEl.value === '__custom__';
+          qCourseCustomEl.classList.toggle('hidden', !isCustom);
+          qCourseCustomEl.required = isCustom;
+          const allCourses = depts.flatMap((d) => d.courses || []);
+          const matched = allCourses.find((c) => c.title === qCourseSelEl.value);
+          const opts = (matched && matched.studyOptions && matched.studyOptions.length)
+            ? matched.studyOptions
+            : ['Full-Time', 'Part-Time', 'Online', 'Hybrid'];
+          qStudyEl.innerHTML = opts.map((o) => `<option value="${this.esc(o)}">${this.esc(o)}</option>`).join('');
+          if (examObj && examObj.studyOption && opts.includes(examObj.studyOption)) {
+            qStudyEl.value = examObj.studyOption;
+          }
+        };
+
+        const initialDept = findMatchedDeptForExam();
+        if (initialDept) qDeptEl.value = initialDept.name;
+        syncQCourses(examObj ? examObj.course : '');
+
+        qDeptEl.addEventListener('change', () => syncQCourses(''));
+        qCourseSelEl.addEventListener('change', syncQStudy);
 
         document.getElementById('qType').addEventListener('change', (e) => {
           document.getElementById('mcqOptionsWrap').classList.toggle('hidden', e.target.value !== 'mcq');
@@ -2895,6 +3402,8 @@
               attachmentName = up.file.filename;
             }
             const type = document.getElementById('qType').value;
+            const selectedCourse = qCourseSelEl.value === '__custom__' ? qCourseCustomEl.value : qCourseSelEl.value;
+            const batchNumber = document.getElementById('qBatchNumber').value;
             const options =
               type === 'mcq'
                 ? [
@@ -2907,6 +3416,10 @@
             const res = await this.api(`/api/examinations/${examId}/questions`, {
               method: 'POST',
               body: {
+                department: qDeptEl.value,
+                course: selectedCourse,
+                studyOption: qStudyEl.value,
+                batchNumber,
                 type,
                 category: document.getElementById('qCat').value,
                 prompt: document.getElementById('qPrompt').value,

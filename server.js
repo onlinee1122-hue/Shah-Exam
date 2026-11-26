@@ -391,11 +391,33 @@ const studentProfileSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const departmentSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, unique: true, trim: true, minlength: 2, maxlength: 100 },
+    code: { type: String, required: true, unique: true, uppercase: true, trim: true, maxlength: 24 },
+    description: { type: String, trim: true, maxlength: 500, default: '' },
+    courses: [
+      {
+        code: { type: String, required: true, uppercase: true, trim: true, maxlength: 32 },
+        title: { type: String, required: true, trim: true, maxlength: 120 },
+        credits: { type: Number, min: 1, max: 20, default: 3 },
+        studyOptions: [{ type: String, trim: true, maxlength: 60 }],
+      },
+    ],
+    status: { type: String, enum: ['active', 'inactive'], default: 'active', index: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  },
+  { timestamps: true }
+);
+
 const examinationSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true, minlength: 3, maxlength: 160 },
     code: { type: String, required: true, unique: true, uppercase: true, trim: true, maxlength: 32 },
+    department: { type: String, trim: true, maxlength: 100, default: '' },
     course: { type: String, required: true, trim: true, maxlength: 120 },
+    studyOption: { type: String, trim: true, maxlength: 80, default: '' },
+    batchNumber: { type: String, trim: true, uppercase: true, maxlength: 60, default: '' },
     description: { type: String, trim: true, maxlength: 2000, default: '' },
     instructions: { type: String, trim: true, maxlength: 2000, default: 'Read every question carefully before submitting.' },
     examDate: { type: Date, required: true, index: true },
@@ -416,6 +438,10 @@ const examinationSchema = new mongoose.Schema(
 const questionSchema = new mongoose.Schema(
   {
     examination: { type: mongoose.Schema.Types.ObjectId, ref: 'Examination', required: true, index: true },
+    department: { type: String, trim: true, maxlength: 100, default: '' },
+    course: { type: String, trim: true, maxlength: 120, default: '' },
+    studyOption: { type: String, trim: true, maxlength: 80, default: '' },
+    batchNumber: { type: String, trim: true, uppercase: true, maxlength: 60, default: 'BATCH-01', index: true },
     type: { type: String, enum: ['mcq', 'true_false', 'short_answer'], required: true, default: 'mcq' },
     category: { type: String, trim: true, maxlength: 80, default: 'General' },
     prompt: { type: String, required: true, trim: true, maxlength: 2000 },
@@ -434,6 +460,7 @@ const questionSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+questionSchema.index({ examination: 1, batchNumber: 1, order: 1 });
 
 const submissionSchema = new mongoose.Schema(
   {
@@ -583,6 +610,7 @@ const fileMetaSchema = new mongoose.Schema(
 
 const User = mongoose.model('User', userSchema);
 const StudentProfile = mongoose.model('StudentProfile', studentProfileSchema);
+const Department = mongoose.model('Department', departmentSchema);
 const Examination = mongoose.model('Examination', examinationSchema);
 const Question = mongoose.model('Question', questionSchema);
 const Submission = mongoose.model('Submission', submissionSchema);
@@ -974,6 +1002,54 @@ async function seedInitialData() {
       details: `Seeded initial administrator account (${adminUser.email})`,
     });
     console.log(`[Seed] Created initial administrator: ${adminUser.email}`);
+  }
+
+  // Idempotent department & courses seeding
+  const existingDepartments = await Department.countDocuments();
+  if (existingDepartments === 0) {
+    await Department.insertMany([
+      {
+        name: 'Computer Science',
+        code: 'CS',
+        description: 'Software Engineering, Web Systems, and Distributed Computing',
+        createdBy: adminUser ? adminUser._id : null,
+        courses: [
+          { code: 'CS-301', title: 'Web Systems Architecture', credits: 4, studyOptions: ['Full-Time', 'Part-Time', 'Online'] },
+          { code: 'CS-204', title: 'Database Engineering', credits: 3, studyOptions: ['Full-Time', 'Hybrid', 'Evening'] },
+          { code: 'CS-412', title: 'Cloud Native Systems', credits: 4, studyOptions: ['Full-Time', 'Online'] },
+        ],
+      },
+      {
+        name: 'Data Science',
+        code: 'DS',
+        description: 'Applied Statistics, Machine Learning, and Big Data Pipelines',
+        createdBy: adminUser ? adminUser._id : null,
+        courses: [
+          { code: 'DS-201', title: 'Applied Analytics & Python', credits: 4, studyOptions: ['Full-Time', 'Online', 'Weekend'] },
+          { code: 'DS-305', title: 'Machine Learning Foundations', credits: 4, studyOptions: ['Full-Time', 'Hybrid'] },
+        ],
+      },
+      {
+        name: 'Cybersecurity',
+        code: 'SEC',
+        description: 'Application Security, Cryptography, and Network Defense',
+        createdBy: adminUser ? adminUser._id : null,
+        courses: [
+          { code: 'SEC-410', title: 'Cybersecurity Foundations', credits: 3, studyOptions: ['Full-Time', 'Evening', 'Online'] },
+          { code: 'SEC-420', title: 'Ethical Hacking & PenTesting', credits: 4, studyOptions: ['Full-Time', 'Hybrid'] },
+        ],
+      },
+      {
+        name: 'Business Analytics',
+        code: 'BA',
+        description: 'Enterprise Intelligence, Financial Modeling, and Operations',
+        createdBy: adminUser ? adminUser._id : null,
+        courses: [
+          { code: 'BA-110', title: 'Business Intelligence & SQL', credits: 3, studyOptions: ['Full-Time', 'Part-Time', 'Online', 'Weekend'] },
+          { code: 'BA-240', title: 'Quantitative Decision Models', credits: 3, studyOptions: ['Part-Time', 'Evening'] },
+        ],
+      },
+    ]);
   }
 
   // Idempotent sample students, exams, questions, results, wallet & messages
@@ -2368,6 +2444,185 @@ function registerRoutes() {
     }
   });
 
+  // ---------------- DEPARTMENTS & COURSES ----------------
+
+  function normalizeCoursesInput(rawCourses) {
+    if (!Array.isArray(rawCourses)) return [];
+    const seenCodes = new Set();
+    const cleaned = [];
+    for (const item of rawCourses) {
+      if (!item || typeof item !== 'object') continue;
+      const title = cleanString(item.title, 120);
+      const code = cleanString(item.code, 32).toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      const credits = Math.min(20, Math.max(1, Number.parseInt(item.credits, 10) || 3));
+      const rawOptions = Array.isArray(item.studyOptions)
+        ? item.studyOptions
+        : typeof item.studyOptions === 'string'
+          ? item.studyOptions.split(',')
+          : [];
+      const studyOptions = Array.from(
+        new Set(rawOptions.map((o) => cleanString(String(o), 60)).filter(Boolean))
+      );
+      if (!title || !code || seenCodes.has(code)) continue;
+      seenCodes.add(code);
+      cleaned.push({
+        code,
+        title,
+        credits,
+        studyOptions: studyOptions.length ? studyOptions : ['Full-Time'],
+      });
+    }
+    return cleaned;
+  }
+
+  app.get('/api/departments/public', async (_req, res, next) => {
+    try {
+      const departments = await Department.find({ status: 'active' })
+        .select('name code courses')
+        .sort({ name: 1 })
+        .lean();
+      return res.json({ success: true, departments });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.get('/api/departments', requireAuth, async (req, res, next) => {
+    try {
+      const query = req.currentUser.role === 'admin' ? {} : { status: 'active' };
+      const departments = await Department.find(query).sort({ name: 1 }).lean();
+      return res.json({ success: true, departments });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/departments', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      const name = cleanString(req.body.name, 100);
+      const code = cleanString(req.body.code, 24).toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      const description = cleanString(req.body.description, 500);
+      const courses = normalizeCoursesInput(req.body.courses);
+
+      if (name.length < 2 || code.length < 2) {
+        return res.status(400).json({ success: false, message: 'Department name and code (min 2 chars) are required.' });
+      }
+      if (!courses.length) {
+        return res.status(400).json({ success: false, message: 'Add at least one course with study options for this department.' });
+      }
+
+      const duplicate = await Department.findOne({ $or: [{ name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }, { code }] });
+      if (duplicate) {
+        return res.status(409).json({ success: false, message: 'A department with this name or code already exists.' });
+      }
+
+      const department = await Department.create({
+        name,
+        code,
+        description,
+        courses,
+        status: 'active',
+        createdBy: req.currentUser._id,
+      });
+
+      await recordActivity(req, 'DEPARTMENT_CREATED', 'Department', department._id, `Created department ${name} (${code}) with ${courses.length} course(s)`);
+      return res.status(201).json({ success: true, message: `Department "${name}" created.`, department });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.put('/api/departments/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid department ID.' });
+      }
+      const dept = await Department.findById(req.params.id);
+      if (!dept) {
+        return res.status(404).json({ success: false, message: 'Department not found.' });
+      }
+
+      if (req.body.name) dept.name = cleanString(req.body.name, 100);
+      if (req.body.code) dept.code = cleanString(req.body.code, 24).toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      if (typeof req.body.description === 'string') dept.description = cleanString(req.body.description, 500);
+      if (['active', 'inactive'].includes(req.body.status)) dept.status = req.body.status;
+      if (Array.isArray(req.body.courses)) {
+        const courses = normalizeCoursesInput(req.body.courses);
+        if (!courses.length) {
+          return res.status(400).json({ success: false, message: 'Department must retain at least one valid course.' });
+        }
+        dept.courses = courses;
+      }
+
+      await dept.save();
+      await recordActivity(req, 'DEPARTMENT_UPDATED', 'Department', dept._id, `Updated department ${dept.name}`);
+      return res.json({ success: true, message: 'Department updated.', department: dept });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/departments/:id/courses', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid department ID.' });
+      }
+      const dept = await Department.findById(req.params.id);
+      if (!dept) {
+        return res.status(404).json({ success: false, message: 'Department not found.' });
+      }
+
+      const [course] = normalizeCoursesInput([req.body]);
+      if (!course) {
+        return res.status(400).json({ success: false, message: 'Valid course code, title, and study options are required.' });
+      }
+      if (dept.courses.some((c) => c.code === course.code || c.title.toLowerCase() === course.title.toLowerCase())) {
+        return res.status(409).json({ success: false, message: 'This course code or title already exists in the department.' });
+      }
+
+      dept.courses.push(course);
+      await dept.save();
+      await recordActivity(req, 'COURSE_ADDED', 'Department', dept._id, `Added course ${course.code} to ${dept.name}`);
+      return res.status(201).json({ success: true, message: `Course "${course.title}" added to ${dept.name}.`, department: dept });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.delete('/api/departments/:id/courses/:courseId', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id) || !isValidObjectId(req.params.courseId)) {
+        return res.status(400).json({ success: false, message: 'Invalid identifier.' });
+      }
+      const dept = await Department.findById(req.params.id);
+      if (!dept) {
+        return res.status(404).json({ success: false, message: 'Department not found.' });
+      }
+      dept.courses = dept.courses.filter((c) => String(c._id) !== req.params.courseId);
+      await dept.save();
+      return res.json({ success: true, message: 'Course removed from department.', department: dept });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.delete('/api/departments/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid department ID.' });
+      }
+      const dept = await Department.findById(req.params.id);
+      if (!dept) {
+        return res.status(404).json({ success: false, message: 'Department not found.' });
+      }
+      await Department.deleteOne({ _id: dept._id });
+      await recordActivity(req, 'DEPARTMENT_DELETED', 'Department', dept._id, `Removed department ${dept.name}`);
+      return res.json({ success: true, message: `Department "${dept.name}" removed.` });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
   // ---------------- EXAMINATIONS & QUESTIONS ----------------
 
   app.get('/api/examinations', requireAuth, async (req, res, next) => {
@@ -2424,7 +2679,10 @@ function registerRoutes() {
     try {
       const title = cleanString(req.body.title, 160);
       const code = cleanString(req.body.code, 32).toUpperCase();
+      const department = cleanString(req.body.department || '', 100);
       const course = cleanString(req.body.course, 120);
+      const studyOption = cleanString(req.body.studyOption || '', 80);
+      const batchNumber = cleanString(req.body.batchNumber || '', 60).toUpperCase();
       const description = cleanString(req.body.description, 2000);
       const instructions = cleanString(req.body.instructions, 2000);
       const examDate = new Date(req.body.examDate);
@@ -2455,7 +2713,10 @@ function registerRoutes() {
       const exam = await Examination.create({
         title,
         code,
+        department,
         course,
+        studyOption,
+        batchNumber,
         description,
         instructions: instructions || undefined,
         examDate,
@@ -2600,13 +2861,31 @@ function registerRoutes() {
         }
       }
 
-      const query = Question.find({ examination: exam._id }).sort({ order: 1, createdAt: 1 });
+      const filter = { examination: exam._id };
+      if (isAdmin) {
+        const courseFilter = cleanString(req.query.course || '', 120);
+        const batchFilter = cleanString(req.query.batchNumber || '', 60).toUpperCase();
+        if (courseFilter) filter.course = courseFilter;
+        if (batchFilter) filter.batchNumber = batchFilter;
+      }
+
+      const query = Question.find(filter).sort({ batchNumber: 1, order: 1, createdAt: 1 });
       if (!isAdmin) {
         query.select('-correctAnswer');
       }
-      const questions = await query.lean();
+      const [questions, allExamQuestions] = await Promise.all([
+        query.lean(),
+        isAdmin ? Question.find({ examination: exam._id }).select('batchNumber course').lean() : Promise.resolve([]),
+      ]);
 
-      return res.json({ success: true, examination: exam, questions });
+      const batches = Array.from(
+        new Set(allExamQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()))
+      ).sort();
+      const courses = Array.from(
+        new Set([exam.course, ...allExamQuestions.map((q) => q.course).filter(Boolean)])
+      ).sort();
+
+      return res.json({ success: true, examination: exam, questions, batches, courses });
     } catch (err) {
       return next(err);
     }
@@ -2623,13 +2902,24 @@ function registerRoutes() {
       }
 
       const type = ['mcq', 'true_false', 'short_answer'].includes(req.body.type) ? req.body.type : 'mcq';
+      const department = cleanString(req.body.department || exam.department || '', 100);
+      const course = cleanString(req.body.course || exam.course || '', 120);
+      const studyOption = cleanString(req.body.studyOption || exam.studyOption || '', 80);
+      const batchNumber = cleanString(req.body.batchNumber || exam.batchNumber || 'BATCH-01', 60)
+        .toUpperCase()
+        .replace(/[^A-Z0-9._-]/g, '-');
       const category = cleanString(req.body.category || 'General', 80);
       const prompt = cleanString(req.body.prompt, 2000);
       const description = cleanString(req.body.description, 1000);
       const correctAnswer = cleanString(req.body.correctAnswer, 1000);
       const marks = Math.max(1, Number.parseInt(req.body.marks, 10) || 10);
-      const order = Number.parseInt(req.body.order, 10) || (await Question.countDocuments({ examination: exam._id })) + 1;
+      const order =
+        Number.parseInt(req.body.order, 10) ||
+        (await Question.countDocuments({ examination: exam._id, batchNumber })) + 1;
 
+      if (!course || !batchNumber) {
+        return res.status(400).json({ success: false, message: 'Selected course and batch number are required.' });
+      }
       if (!prompt || !correctAnswer) {
         return res.status(400).json({ success: false, message: 'Question prompt and correct answer are required.' });
       }
@@ -2658,6 +2948,10 @@ function registerRoutes() {
 
       const question = await Question.create({
         examination: exam._id,
+        department,
+        course,
+        studyOption,
+        batchNumber,
         type,
         category,
         prompt,
@@ -2670,8 +2964,18 @@ function registerRoutes() {
         attachmentName,
       });
 
-      await recordActivity(req, 'QUESTION_CREATED', 'Question', question._id, `Added question to ${exam.code}`);
-      return res.status(201).json({ success: true, message: 'Question added.', question });
+      await recordActivity(
+        req,
+        'QUESTION_CREATED',
+        'Question',
+        question._id,
+        `Added question to ${exam.code} (${course} / ${batchNumber})`
+      );
+      return res.status(201).json({
+        success: true,
+        message: `Question saved under batch ${batchNumber}.`,
+        question,
+      });
     } catch (err) {
       return next(err);
     }
@@ -2687,6 +2991,12 @@ function registerRoutes() {
         return res.status(404).json({ success: false, message: 'Question not found.' });
       }
 
+      if (typeof req.body.department === 'string') q.department = cleanString(req.body.department, 100);
+      if (typeof req.body.course === 'string' && req.body.course.trim()) q.course = cleanString(req.body.course, 120);
+      if (typeof req.body.studyOption === 'string') q.studyOption = cleanString(req.body.studyOption, 80);
+      if (typeof req.body.batchNumber === 'string' && req.body.batchNumber.trim()) {
+        q.batchNumber = cleanString(req.body.batchNumber, 60).toUpperCase().replace(/[^A-Z0-9._-]/g, '-');
+      }
       if (req.body.prompt) q.prompt = cleanString(req.body.prompt, 2000);
       if (typeof req.body.description === 'string') q.description = cleanString(req.body.description, 1000);
       if (req.body.category) q.category = cleanString(req.body.category, 80);
