@@ -410,6 +410,19 @@ const departmentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const batchSchema = new mongoose.Schema(
+  {
+    batchNumber: { type: String, required: true, unique: true, uppercase: true, trim: true, minlength: 2, maxlength: 60 },
+    department: { type: String, trim: true, maxlength: 100, default: '' },
+    course: { type: String, trim: true, maxlength: 120, default: '' },
+    studyOption: { type: String, trim: true, maxlength: 80, default: '' },
+    description: { type: String, trim: true, maxlength: 300, default: '' },
+    status: { type: String, enum: ['active', 'inactive'], default: 'active', index: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  },
+  { timestamps: true }
+);
+
 const examinationSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true, minlength: 3, maxlength: 160 },
@@ -611,6 +624,7 @@ const fileMetaSchema = new mongoose.Schema(
 const User = mongoose.model('User', userSchema);
 const StudentProfile = mongoose.model('StudentProfile', studentProfileSchema);
 const Department = mongoose.model('Department', departmentSchema);
+const Batch = mongoose.model('Batch', batchSchema);
 const Examination = mongoose.model('Examination', examinationSchema);
 const Question = mongoose.model('Question', questionSchema);
 const Submission = mongoose.model('Submission', submissionSchema);
@@ -1049,6 +1063,16 @@ async function seedInitialData() {
           { code: 'BA-240', title: 'Quantitative Decision Models', credits: 3, studyOptions: ['Part-Time', 'Evening'] },
         ],
       },
+    ]);
+  }
+
+  // Idempotent batch seeding
+  const existingBatches = await Batch.countDocuments();
+  if (existingBatches === 0) {
+    await Batch.insertMany([
+      { batchNumber: 'BATCH-01', description: 'Primary Cohort Batch 01', status: 'active', createdBy: adminUser ? adminUser._id : null },
+      { batchNumber: 'BATCH-02', description: 'Cohort Batch 02', status: 'active', createdBy: adminUser ? adminUser._id : null },
+      { batchNumber: 'BATCH-03', description: 'Cohort Batch 03', status: 'active', createdBy: adminUser ? adminUser._id : null },
     ]);
   }
 
@@ -2703,6 +2727,119 @@ function registerRoutes() {
     }
   });
 
+  // ---------------- BATCH NUMBERS MANAGEMENT ----------------
+
+  function normalizeBatchNumber(raw) {
+    return cleanString(raw || '', 60)
+      .toUpperCase()
+      .replace(/[^A-Z0-9._-]/g, '-');
+  }
+
+  app.get('/api/batches', requireAuth, async (req, res, next) => {
+    try {
+      const filter = req.currentUser.role === 'admin' ? {} : { status: 'active' };
+      const batches = await Batch.find(filter).sort({ batchNumber: 1 }).lean();
+      return res.json({ success: true, batches });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/batches', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      const batchNumber = normalizeBatchNumber(req.body.batchNumber);
+      const department = cleanString(req.body.department || '', 100);
+      const course = cleanString(req.body.course || '', 120);
+      const studyOption = cleanString(req.body.studyOption || '', 80);
+      const description = cleanString(req.body.description || '', 300);
+
+      if (batchNumber.length < 2) {
+        return res.status(400).json({ success: false, message: 'Batch number (min 2 characters) is required.' });
+      }
+
+      const duplicate = await Batch.exists({ batchNumber });
+      if (duplicate) {
+        return res.status(409).json({ success: false, message: `Batch "${batchNumber}" already exists.` });
+      }
+
+      const batch = await Batch.create({
+        batchNumber,
+        department,
+        course,
+        studyOption,
+        description,
+        status: 'active',
+        createdBy: req.currentUser._id,
+      });
+
+      await recordActivity(req, 'BATCH_CREATED', 'Batch', batch._id, `Created batch ${batchNumber}${course ? ` for ${course}` : ''}`);
+      return res.status(201).json({ success: true, message: `Batch "${batchNumber}" added.`, batch });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.put('/api/batches/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid batch ID.' });
+      }
+      const batch = await Batch.findById(req.params.id);
+      if (!batch) {
+        return res.status(404).json({ success: false, message: 'Batch not found.' });
+      }
+
+      const oldBatchNumber = batch.batchNumber;
+      const nextBatchNumber = req.body.batchNumber ? normalizeBatchNumber(req.body.batchNumber) : batch.batchNumber;
+      if (nextBatchNumber.length < 2) {
+        return res.status(400).json({ success: false, message: 'Batch number must be at least 2 characters.' });
+      }
+
+      const duplicate = await Batch.exists({ _id: { $ne: batch._id }, batchNumber: nextBatchNumber });
+      if (duplicate) {
+        return res.status(409).json({ success: false, message: `Another batch with number "${nextBatchNumber}" already exists.` });
+      }
+
+      batch.batchNumber = nextBatchNumber;
+      if (typeof req.body.department === 'string') batch.department = cleanString(req.body.department, 100);
+      if (typeof req.body.course === 'string') batch.course = cleanString(req.body.course, 120);
+      if (typeof req.body.studyOption === 'string') batch.studyOption = cleanString(req.body.studyOption, 80);
+      if (typeof req.body.description === 'string') batch.description = cleanString(req.body.description, 300);
+      if (['active', 'inactive'].includes(req.body.status)) batch.status = req.body.status;
+
+      await batch.save();
+
+      if (oldBatchNumber !== batch.batchNumber) {
+        await Promise.all([
+          Examination.updateMany({ batchNumber: oldBatchNumber }, { $set: { batchNumber: batch.batchNumber } }),
+          Question.updateMany({ batchNumber: oldBatchNumber }, { $set: { batchNumber: batch.batchNumber } }),
+        ]);
+      }
+
+      await recordActivity(req, 'BATCH_UPDATED', 'Batch', batch._id, `Updated batch ${batch.batchNumber}`);
+      return res.json({ success: true, message: `Batch "${batch.batchNumber}" updated.`, batch });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.delete('/api/batches/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid batch ID.' });
+      }
+      const batch = await Batch.findById(req.params.id);
+      if (!batch) {
+        return res.status(404).json({ success: false, message: 'Batch not found.' });
+      }
+      await Batch.deleteOne({ _id: batch._id });
+      await recordActivity(req, 'BATCH_DELETED', 'Batch', batch._id, `Removed batch ${batch.batchNumber}`);
+      return res.json({ success: true, message: `Batch "${batch.batchNumber}" removed.` });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
   // ---------------- EXAMINATIONS & QUESTIONS ----------------
 
   app.get('/api/examinations', requireAuth, async (req, res, next) => {
@@ -2826,6 +2963,23 @@ function registerRoutes() {
         }
       }
 
+      if (batchNumber) {
+        await Batch.updateOne(
+          { batchNumber },
+          {
+            $setOnInsert: {
+              batchNumber,
+              department,
+              course,
+              studyOption,
+              status: 'active',
+              createdBy: req.currentUser._id,
+            },
+          },
+          { upsert: true }
+        );
+      }
+
       await recordActivity(req, 'EXAM_CREATED', 'Examination', exam._id, `Created ${code}: ${title}`);
       return res.status(201).json({ success: true, message: 'Examination created.', examination: exam });
     } catch (err) {
@@ -2929,18 +3083,23 @@ function registerRoutes() {
       if (batchFilter) filter.batchNumber = batchFilter;
 
       const scopeFilter = filter.examination ? { examination: filter.examination } : {};
-      const [questions, scopeQuestions, allDepts, allExams] = await Promise.all([
+      const [questions, scopeQuestions, allDepts, allExams, savedBatches] = await Promise.all([
         Question.find(filter)
           .populate('examination', 'code title course department')
           .sort({ batchNumber: 1, order: 1, createdAt: 1 })
           .lean(),
         Question.find(scopeFilter).select('batchNumber course').lean(),
         Department.find({}).select('name code courses').lean(),
-        Examination.find({}).select('course').lean(),
+        Examination.find({}).select('course batchNumber').lean(),
+        Batch.find({ status: 'active' }).select('batchNumber').lean(),
       ]);
 
       const batches = Array.from(
-        new Set(scopeQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()))
+        new Set([
+          ...savedBatches.map((b) => (b.batchNumber || '').toUpperCase()).filter(Boolean),
+          ...allExams.map((e) => (e.batchNumber || '').toUpperCase()).filter(Boolean),
+          ...scopeQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()),
+        ])
       ).sort();
       const deptCourses = allDepts.flatMap((d) => (d.courses || []).map((c) => c.title).filter(Boolean));
       const courses = Array.from(
@@ -2997,14 +3156,18 @@ function registerRoutes() {
       if (!isAdmin) {
         query.select('-correctAnswer');
       }
-      const [questions, allExamQuestions, allDepts] = await Promise.all([
+      const [questions, allExamQuestions, allDepts, savedBatches] = await Promise.all([
         query.lean(),
         isAdmin ? Question.find({ examination: exam._id }).select('batchNumber course').lean() : Promise.resolve([]),
         isAdmin ? Department.find({}).select('courses').lean() : Promise.resolve([]),
+        isAdmin ? Batch.find({ status: 'active' }).select('batchNumber').lean() : Promise.resolve([]),
       ]);
 
       const batches = Array.from(
-        new Set(allExamQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()))
+        new Set([
+          ...savedBatches.map((b) => (b.batchNumber || '').toUpperCase()).filter(Boolean),
+          ...allExamQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()),
+        ])
       ).sort();
       const deptCourses = allDepts.flatMap((d) => (d.courses || []).map((c) => c.title).filter(Boolean));
       const courses = Array.from(
@@ -3089,6 +3252,21 @@ function registerRoutes() {
         attachmentFileId,
         attachmentName,
       });
+
+      await Batch.updateOne(
+        { batchNumber },
+        {
+          $setOnInsert: {
+            batchNumber,
+            department,
+            course,
+            studyOption,
+            status: 'active',
+            createdBy: req.currentUser._id,
+          },
+        },
+        { upsert: true }
+      );
 
       await recordActivity(
         req,

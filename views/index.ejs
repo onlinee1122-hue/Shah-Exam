@@ -1438,6 +1438,7 @@
       activeExamState: null,
       studentPage: 1,
       departments: [],
+      batches: [],
 
       async loadPublicDepartments() {
         try {
@@ -1465,6 +1466,17 @@
           this.departments = this.departments || [];
         }
         return this.departments;
+      },
+
+      async ensureBatches(force = false) {
+        if (!force && this.batches && this.batches.length) return this.batches;
+        try {
+          const res = await this.api('/api/batches');
+          this.batches = res.batches || [];
+        } catch (_err) {
+          this.batches = this.batches || [];
+        }
+        return this.batches;
       },
 
       esc(str) {
@@ -1983,6 +1995,7 @@
                 label: 'Academics',
                 items: [
                   { view: 'departments', icon: 'fa-sitemap', text: 'Departments & Courses' },
+                  { view: 'batches', icon: 'fa-layer-group', text: 'Batches' },
                   { view: 'examinations', icon: 'fa-file-signature', text: 'Examinations' },
                   { view: 'questions', icon: 'fa-circle-question', text: 'Question Bank' },
                   { view: 'submissions', icon: 'fa-clipboard-check', text: 'Submissions & Grading' },
@@ -2088,6 +2101,9 @@
               break;
             case 'departments':
               await this.loadDepartments();
+              break;
+            case 'batches':
+              await this.loadBatches();
               break;
             case 'examinations':
               await this.loadExaminations();
@@ -3120,8 +3136,238 @@
         });
       },
 
+      // ---------------- 2C. BATCHES MANAGEMENT (ADMIN) ----------------
+      async loadBatches() {
+        this.setPageMeta(
+          'Academics',
+          'Batch Numbers',
+          `<button class="btn btn-orange btn-sm" onclick="App.openCreateBatchModal()"><i class="fa-solid fa-plus"></i> Add New Batch</button>`
+        );
+        const batches = await this.ensureBatches(true);
+
+        document.getElementById('appContent').innerHTML = `
+          <div class="card">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Batch Number</th><th>Department</th><th>Course</th><th>Study Option</th><th>Description</th><th>Status</th><th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${batches.length ? batches.map((b) => `
+                    <tr>
+                      <td><strong>${this.esc(b.batchNumber)}</strong></td>
+                      <td>${this.esc(b.department || 'All Departments')}</td>
+                      <td>${this.esc(b.course || 'All Courses')}</td>
+                      <td>${b.studyOption ? `<span class="badge badge-teal">${this.esc(b.studyOption)}</span>` : '—'}</td>
+                      <td>${this.esc(b.description || '—')}</td>
+                      <td><span class="badge ${b.status === 'active' ? 'badge-green' : 'badge-muted'}">${this.esc(b.status)}</span></td>
+                      <td>
+                        <div style="display:flex;gap:6px;">
+                          <button type="button" class="btn btn-primary btn-sm" data-edit-batch="${this.esc(b._id)}" title="Edit Batch"><i class="fa-solid fa-pen"></i></button>
+                          <button type="button" class="btn btn-danger btn-sm" data-del-batch="${this.esc(b._id)}" title="Remove Batch"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                      </td>
+                    </tr>`).join('') : `<tr><td colspan="7" class="empty-state">No batch numbers configured yet. Click "Add New Batch" to create one.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+
+        const container = document.getElementById('appContent');
+        container.querySelectorAll('[data-edit-batch]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const batch = batches.find((b) => String(b._id) === btn.getAttribute('data-edit-batch'));
+            if (batch) this.openEditBatchModal(batch);
+          });
+        });
+        container.querySelectorAll('[data-del-batch]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const batch = batches.find((b) => String(b._id) === btn.getAttribute('data-del-batch'));
+            if (batch) this.deleteBatch(batch);
+          });
+        });
+      },
+
+      async openCreateBatchModal(onSaved = null) {
+        const depts = await this.ensureDepartments(true);
+        this.showModal('Add New Batch Number', `
+          <form id="createBatchForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Batch Number</label><input id="cbNumber" class="form-control" placeholder="e.g. BATCH-04 or B-2026-A" required /></div>
+              <div class="form-group">
+                <label class="form-label">Department (Optional)</label>
+                <select id="cbDept" class="form-control">
+                  <option value="">All Departments</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Course (Optional)</label>
+                <select id="cbCourse" class="form-control">
+                  <option value="">All Courses</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Study Option (Optional)</label>
+                <select id="cbStudy" class="form-control">
+                  <option value="">Any Study Option</option>
+                  <option value="Full-Time">Full-Time</option>
+                  <option value="Part-Time">Part-Time</option>
+                  <option value="Online">Online</option>
+                  <option value="Hybrid">Hybrid</option>
+                  <option value="Evening">Evening</option>
+                  <option value="Weekend">Weekend</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group"><label class="form-label">Description / Notes</label><input id="cbDesc" class="form-control" placeholder="e.g. Spring 2027 Morning Cohort" /></div>
+            <button type="submit" class="btn btn-primary btn-block">Save Batch Number</button>
+          </form>
+        `);
+
+        const deptEl = document.getElementById('cbDept');
+        const courseEl = document.getElementById('cbCourse');
+        const syncCourses = () => {
+          const dept = depts.find((d) => d.name === deptEl.value);
+          const list = dept ? (dept.courses || []) : depts.flatMap((d) => d.courses || []);
+          courseEl.innerHTML = `<option value="">All Courses</option>` +
+            list.map((c) => `<option value="${this.esc(c.title)}">${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('');
+        };
+        syncCourses();
+        deptEl.addEventListener('change', syncCourses);
+
+        document.getElementById('createBatchForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const res = await this.api('/api/batches', {
+              method: 'POST',
+              body: {
+                batchNumber: document.getElementById('cbNumber').value,
+                department: deptEl.value,
+                course: courseEl.value,
+                studyOption: document.getElementById('cbStudy').value,
+                description: document.getElementById('cbDesc').value,
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureBatches(true);
+            if (typeof onSaved === 'function') onSaved(res.batch);
+            else if (this.currentView === 'batches') this.loadBatches();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async openEditBatchModal(batch) {
+        const depts = await this.ensureDepartments(true);
+        this.showModal(`Edit Batch — ${batch.batchNumber}`, `
+          <form id="editBatchForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Batch Number</label><input id="ebNumber" class="form-control" value="${this.esc(batch.batchNumber)}" required /></div>
+              <div class="form-group">
+                <label class="form-label">Status</label>
+                <select id="ebStatus" class="form-control">
+                  <option value="active" ${batch.status === 'active' ? 'selected' : ''}>Active</option>
+                  <option value="inactive" ${batch.status === 'inactive' ? 'selected' : ''}>Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Department</label>
+                <select id="ebDept" class="form-control">
+                  <option value="">All Departments</option>
+                  ${depts.map((d) => `<option value="${this.esc(d.name)}" ${batch.department === d.name ? 'selected' : ''}>${this.esc(d.name)} (${this.esc(d.code)})</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Course</label>
+                <select id="ebCourse" class="form-control"></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Study Option</label>
+                <select id="ebStudy" class="form-control">
+                  <option value="">Any Study Option</option>
+                  ${['Full-Time', 'Part-Time', 'Online', 'Hybrid', 'Evening', 'Weekend'].map((o) => `<option value="${this.esc(o)}" ${batch.studyOption === o ? 'selected' : ''}>${this.esc(o)}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group"><label class="form-label">Description</label><input id="ebDesc" class="form-control" value="${this.esc(batch.description || '')}" /></div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Update Batch</button>
+          </form>
+        `);
+
+        const deptEl = document.getElementById('ebDept');
+        const courseEl = document.getElementById('ebCourse');
+        const syncCourses = (prefer = '') => {
+          const dept = depts.find((d) => d.name === deptEl.value);
+          const list = dept ? (dept.courses || []) : depts.flatMap((d) => d.courses || []);
+          courseEl.innerHTML = `<option value="">All Courses</option>` +
+            list.map((c) => `<option value="${this.esc(c.title)}">${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('');
+          if (prefer) courseEl.value = prefer;
+        };
+        syncCourses(batch.course || '');
+        deptEl.addEventListener('change', () => syncCourses(''));
+
+        document.getElementById('editBatchForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const res = await this.api(`/api/batches/${batch._id}`, {
+              method: 'PUT',
+              body: {
+                batchNumber: document.getElementById('ebNumber').value,
+                status: document.getElementById('ebStatus').value,
+                department: deptEl.value,
+                course: courseEl.value,
+                studyOption: document.getElementById('ebStudy').value,
+                description: document.getElementById('ebDesc').value,
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureBatches(true);
+            this.loadBatches();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      async deleteBatch(batch) {
+        this.showModal('Confirm Batch Removal', `
+          <p style="margin-bottom:16px;">Remove batch <strong>${this.esc(batch.batchNumber)}</strong> from the batch list?</p>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button class="btn btn-outline" onclick="App.closeModal()">Cancel</button>
+            <button class="btn btn-danger" id="confirmDelBatchBtn">Remove</button>
+          </div>
+        `);
+        document.getElementById('confirmDelBatchBtn').addEventListener('click', async () => {
+          try {
+            const res = await this.api(`/api/batches/${batch._id}`, { method: 'DELETE' });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureBatches(true);
+            this.loadBatches();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
       async openCreateExamModal() {
-        const depts = await this.ensureDepartments();
+        const [depts, batches] = await Promise.all([
+          this.ensureDepartments(true),
+          this.ensureBatches(true),
+        ]);
         const defaultDate = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
         this.showModal('Create Examination', `
           <form id="createExamForm">
@@ -3150,7 +3396,15 @@
                   <option value="Full-Time">Full-Time</option>
                 </select>
               </div>
-              <div class="form-group"><label class="form-label">Batch Number (Optional)</label><input id="exBatch" class="form-control" placeholder="e.g. BATCH-01" /></div>
+              <div class="form-group">
+                <label class="form-label">Batch Number (Optional)</label>
+                <select id="exBatchSelect" class="form-control">
+                  <option value="">-- Optional / None --</option>
+                  ${batches.filter((b) => b.status === 'active').map((b) => `<option value="${this.esc(b.batchNumber)}">${this.esc(b.batchNumber)}</option>`).join('')}
+                  <option value="__new_batch__">+ Add New Batch Number...</option>
+                </select>
+                <input id="exBatch" class="form-control hidden" style="margin-top:6px;" placeholder="Enter new batch e.g. BATCH-04" />
+              </div>
             </div>
             <div class="form-row">
               <div class="form-group"><label class="form-label">Exam Date</label><input id="exDate" type="date" class="form-control" value="${defaultDate}" required /></div>
@@ -3174,6 +3428,14 @@
         const courseSelEl = document.getElementById('exCourseSelect');
         const courseInputEl = document.getElementById('exCourse');
         const studySelEl = document.getElementById('exStudyOption');
+        const exBatchSelEl = document.getElementById('exBatchSelect');
+        const exBatchInputEl = document.getElementById('exBatch');
+
+        exBatchSelEl.addEventListener('change', () => {
+          const isNew = exBatchSelEl.value === '__new_batch__';
+          exBatchInputEl.classList.toggle('hidden', !isNew);
+          exBatchInputEl.required = isNew;
+        });
 
         const syncCourses = () => {
           const dept = depts.find((d) => d.name === deptEl.value);
@@ -3204,6 +3466,7 @@
           e.preventDefault();
           try {
             const chosenCourse = courseSelEl.value === '__custom__' ? courseInputEl.value : courseSelEl.value;
+            const chosenBatch = exBatchSelEl.value === '__new_batch__' ? exBatchInputEl.value : exBatchSelEl.value;
             const res = await this.api('/api/examinations', {
               method: 'POST',
               body: {
@@ -3212,7 +3475,7 @@
                 department: deptEl.value,
                 course: chosenCourse,
                 studyOption: studySelEl.value,
-                batchNumber: document.getElementById('exBatch').value,
+                batchNumber: chosenBatch,
                 examDate: document.getElementById('exDate').value,
                 durationMinutes: Number(document.getElementById('exDur').value),
                 totalMarks: Number(document.getElementById('exTotal').value),
@@ -3363,7 +3626,10 @@
                   ${availableBatches.map((b) => `<option value="${this.esc(b)}" ${selectedBatch === b ? 'selected' : ''}>Batch: ${this.esc(b)}</option>`).join('')}
                 </select>
               </div>
-              <button class="btn btn-primary btn-sm" id="addQuestionBtn"><i class="fa-solid fa-plus"></i> Add Question</button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-teal btn-sm" id="addBatchBtn"><i class="fa-solid fa-layer-group"></i> Add Batch</button>
+                <button type="button" class="btn btn-primary btn-sm" id="addQuestionBtn"><i class="fa-solid fa-plus"></i> Add Question</button>
+              </div>
             </div>
 
             ${renderBatchSections()}
@@ -3379,8 +3645,11 @@
         document.getElementById('qbBatchFilter').addEventListener('change', (e) => {
           this.loadQuestions(examId, document.getElementById('qbCourseFilter').value, e.target.value);
         });
+        document.getElementById('addBatchBtn').addEventListener('click', () => {
+          this.openCreateBatchModal(() => this.loadQuestions(examId, selectedCourse, selectedBatch));
+        });
         document.getElementById('addQuestionBtn').addEventListener('click', () => {
-          this.openAddQuestionModal(examId, currentExam, availableBatches, '', selectedCourse, exams);
+          this.openAddQuestionModal(examId, currentExam, availableBatches, selectedBatch, selectedCourse, exams);
         });
         document.querySelectorAll('[data-add-to-batch]').forEach((btn) => {
           btn.addEventListener('click', () => {
@@ -3395,9 +3664,10 @@
       },
 
       async openAddQuestionModal(examId = 'all', examObj = null, existingBatches = [], presetBatch = '', presetCourse = '', examsList = null) {
-        const [depts, exams] = await Promise.all([
+        const [depts, exams, savedBatches] = await Promise.all([
           this.ensureDepartments(true),
           examsList ? Promise.resolve(examsList) : this.api('/api/examinations').then((r) => r.examinations || []),
+          this.ensureBatches(true),
         ]);
         if (!exams.length) {
           this.showToast('Create an examination first before adding questions.', 'warning');
@@ -3405,8 +3675,14 @@
         }
         const initialExamId = examId && examId !== 'all' ? examId : exams[0]._id;
         const resolvedExam = examObj || exams.find((ex) => ex._id === initialExamId) || exams[0];
-        const defaultBatch = presetBatch || (resolvedExam && resolvedExam.batchNumber) || existingBatches[0] || 'BATCH-01';
-        const batchListId = 'qBatchSuggestions';
+        const allBatchOptions = Array.from(
+          new Set([
+            ...savedBatches.filter((b) => b.status === 'active').map((b) => b.batchNumber),
+            ...existingBatches,
+            'BATCH-01',
+          ].filter(Boolean))
+        ).sort();
+        const defaultBatch = presetBatch || (resolvedExam && resolvedExam.batchNumber) || allBatchOptions[0] || 'BATCH-01';
 
         this.showModal('Add Question (Course & Batch Wise)', `
           <form id="addQuestionForm">
@@ -3437,13 +3713,11 @@
               </div>
               <div class="form-group">
                 <label class="form-label">Batch Number (for selected course)</label>
-                <input id="qBatchNumber" list="${batchListId}" class="form-control" value="${this.esc(defaultBatch)}" placeholder="e.g. BATCH-01 or B-2026-A" required />
-                <datalist id="${batchListId}">
-                  ${existingBatches.map((b) => `<option value="${this.esc(b)}"></option>`).join('')}
-                  <option value="BATCH-01"></option>
-                  <option value="BATCH-02"></option>
-                  <option value="BATCH-03"></option>
-                </datalist>
+                <select id="qBatchSelect" class="form-control">
+                  ${allBatchOptions.map((b) => `<option value="${this.esc(b)}" ${b === defaultBatch ? 'selected' : ''}>${this.esc(b)}</option>`).join('')}
+                  <option value="__new_batch__">+ Add New Batch Number...</option>
+                </select>
+                <input id="qBatchNumber" class="form-control hidden" style="margin-top:6px;" placeholder="Enter new batch e.g. BATCH-04 or B-2026-A" />
               </div>
             </div>
             <div class="form-row">
@@ -3554,6 +3828,13 @@
         qDeptEl.addEventListener('change', () => syncQCourses(''));
         qCourseSelEl.addEventListener('change', syncQStudy);
 
+        document.getElementById('qBatchSelect').addEventListener('change', (e) => {
+          const isNew = e.target.value === '__new_batch__';
+          const input = document.getElementById('qBatchNumber');
+          input.classList.toggle('hidden', !isNew);
+          input.required = isNew;
+        });
+
         document.getElementById('qType').addEventListener('change', (e) => {
           document.getElementById('mcqOptionsWrap').classList.toggle('hidden', e.target.value !== 'mcq');
         });
@@ -3572,7 +3853,8 @@
             }
             const type = document.getElementById('qType').value;
             const selectedCourse = qCourseSelEl.value === '__custom__' ? qCourseCustomEl.value : qCourseSelEl.value;
-            const batchNumber = document.getElementById('qBatchNumber').value;
+            const batchSelVal = document.getElementById('qBatchSelect').value;
+            const batchNumber = batchSelVal === '__new_batch__' ? document.getElementById('qBatchNumber').value : batchSelVal;
             const resolvedDept = qDeptEl.value || (findMatchedDeptForCourse(selectedCourse) ? findMatchedDeptForCourse(selectedCourse).name : '');
             const options =
               type === 'mcq'
