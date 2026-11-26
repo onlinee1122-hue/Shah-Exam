@@ -2780,6 +2780,7 @@
                     ${dept.description ? `<p style="font-size:12.5px;color:var(--text-muted);margin-top:4px;">${this.esc(dept.description)}</p>` : ''}
                   </div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-primary btn-sm" data-edit-dept="${this.esc(dept._id)}"><i class="fa-solid fa-pen"></i> Edit</button>
                     <button type="button" class="btn btn-teal btn-sm" data-add-course-dept="${this.esc(dept._id)}"><i class="fa-solid fa-plus"></i> Add Course</button>
                     <button type="button" class="btn btn-danger btn-sm" data-del-dept="${this.esc(dept._id)}"><i class="fa-solid fa-trash"></i></button>
                   </div>
@@ -2803,7 +2804,10 @@
                             </div>
                           </td>
                           <td>
-                            <button type="button" class="btn btn-danger btn-sm" data-del-course="${this.esc(c._id)}" data-dept-id="${this.esc(dept._id)}" title="Remove Course"><i class="fa-solid fa-trash"></i></button>
+                            <div style="display:flex;gap:6px;">
+                              <button type="button" class="btn btn-primary btn-sm" data-edit-course="${this.esc(c._id)}" data-dept-id="${this.esc(dept._id)}" title="Edit Course"><i class="fa-solid fa-pen"></i></button>
+                              <button type="button" class="btn btn-danger btn-sm" data-del-course="${this.esc(c._id)}" data-dept-id="${this.esc(dept._id)}" title="Remove Course"><i class="fa-solid fa-trash"></i></button>
+                            </div>
                           </td>
                         </tr>`).join('') : `<tr><td colspan="5" class="empty-state">No courses added to this department yet.</td></tr>`}
                     </tbody>
@@ -2815,6 +2819,12 @@
         `;
 
         const container = document.getElementById('appContent');
+        container.querySelectorAll('[data-edit-dept]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const dept = depts.find((d) => String(d._id) === btn.getAttribute('data-edit-dept'));
+            if (dept) this.openEditDepartmentModal(dept);
+          });
+        });
         container.querySelectorAll('[data-add-course-dept]').forEach((btn) => {
           btn.addEventListener('click', () => {
             const dept = depts.find((d) => String(d._id) === btn.getAttribute('data-add-course-dept'));
@@ -2827,6 +2837,15 @@
             if (dept) this.deleteDepartment(dept._id, dept.name);
           });
         });
+        container.querySelectorAll('[data-edit-course]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const deptId = btn.getAttribute('data-dept-id');
+            const courseId = btn.getAttribute('data-edit-course');
+            const dept = depts.find((d) => String(d._id) === deptId);
+            const course = dept && (dept.courses || []).find((c) => String(c._id) === courseId);
+            if (dept && course) this.openEditCourseModal(dept, course);
+          });
+        });
         container.querySelectorAll('[data-del-course]').forEach((btn) => {
           btn.addEventListener('click', () => {
             const deptId = btn.getAttribute('data-dept-id');
@@ -2835,6 +2854,100 @@
             const course = dept && (dept.courses || []).find((c) => String(c._id) === courseId);
             this.deleteCourse(deptId, courseId, course ? course.title : 'Course');
           });
+        });
+      },
+
+      openEditDepartmentModal(dept) {
+        this.showModal(`Edit Department — ${dept.name}`, `
+          <form id="editDeptForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Department Name</label><input id="edName" class="form-control" value="${this.esc(dept.name)}" required /></div>
+              <div class="form-group"><label class="form-label">Department Code</label><input id="edCode" class="form-control" value="${this.esc(dept.code)}" required /></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Status</label>
+              <select id="edStatus" class="form-control">
+                <option value="active" ${dept.status === 'active' ? 'selected' : ''}>Active</option>
+                <option value="inactive" ${dept.status === 'inactive' ? 'selected' : ''}>Inactive</option>
+              </select>
+            </div>
+            <div class="form-group"><label class="form-label">Description</label><textarea id="edDesc" class="form-control">${this.esc(dept.description || '')}</textarea></div>
+            <button type="submit" class="btn btn-primary btn-block">Update Department</button>
+          </form>
+        `);
+
+        document.getElementById('editDeptForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const res = await this.api(`/api/departments/${dept._id}`, {
+              method: 'PUT',
+              body: {
+                name: document.getElementById('edName').value,
+                code: document.getElementById('edCode').value,
+                status: document.getElementById('edStatus').value,
+                description: document.getElementById('edDesc').value,
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureDepartments(true);
+            this.loadDepartments();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
+        });
+      },
+
+      openEditCourseModal(dept, course) {
+        const studyOptionChoices = ['Full-Time', 'Part-Time', 'Online', 'Hybrid', 'Evening', 'Weekend'];
+        const existingOpts = Array.isArray(course.studyOptions) ? course.studyOptions : [];
+        const customExisting = existingOpts.filter((o) => !studyOptionChoices.includes(o));
+
+        this.showModal(`Edit Course — ${dept.name}`, `
+          <form id="editCourseForm">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Course Code</label><input id="ecCode" class="form-control" value="${this.esc(course.code)}" required /></div>
+              <div class="form-group"><label class="form-label">Course Title</label><input id="ecTitle" class="form-control" value="${this.esc(course.title)}" required /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Credits</label><input id="ecCredits" type="number" min="1" max="20" class="form-control" value="${Number(course.credits) || 3}" /></div>
+              <div class="form-group"><label class="form-label">Custom Study Options (comma separated)</label><input id="ecCustomOpts" class="form-control" value="${this.esc(customExisting.join(', '))}" placeholder="e.g. Bootcamp, Self-Paced" /></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Study Options (select all offered)</label>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                ${studyOptionChoices.map((opt) => `
+                  <label class="checkbox-label" style="font-size:12.5px;">
+                    <input type="checkbox" class="ec-opt-cb" value="${this.esc(opt)}" ${existingOpts.includes(opt) ? 'checked' : ''} />
+                    <span>${this.esc(opt)}</span>
+                  </label>`).join('')}
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Save Course Changes</button>
+          </form>
+        `);
+
+        document.getElementById('editCourseForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const checked = Array.from(document.querySelectorAll('.ec-opt-cb:checked')).map((cb) => cb.value);
+            const customList = (document.getElementById('ecCustomOpts').value || '').split(',').map((s) => s.trim()).filter(Boolean);
+            const res = await this.api(`/api/departments/${dept._id}/courses/${course._id}`, {
+              method: 'PUT',
+              body: {
+                code: document.getElementById('ecCode').value,
+                title: document.getElementById('ecTitle').value,
+                credits: Number(document.getElementById('ecCredits').value) || 3,
+                studyOptions: Array.from(new Set([...checked, ...customList])),
+              },
+            });
+            this.closeModal();
+            this.showToast(res.message, 'success');
+            await this.ensureDepartments(true);
+            this.loadDepartments();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          }
         });
       },
 
@@ -3141,27 +3254,43 @@
         }
       },
 
-      // ---------------- 4. QUESTION BANK (ADMIN — BATCH NUMBER WISE) ----------------
-      async loadQuestions(selectedExamId = '', selectedCourse = '', selectedBatch = '') {
+      // ---------------- 4. QUESTION BANK (ADMIN — ALL COURSES & BATCH NUMBER WISE) ----------------
+      async loadQuestions(selectedExamId = 'all', selectedCourse = '', selectedBatch = '') {
         this.setPageMeta('Academics', 'Question Bank');
-        const [exData] = await Promise.all([
+        const [exData, depts] = await Promise.all([
           this.api('/api/examinations'),
-          this.ensureDepartments(),
+          this.ensureDepartments(true),
         ]);
         const exams = exData.examinations;
         if (!exams.length) {
           document.getElementById('appContent').innerHTML = `<div class="card"><div class="empty-state"><i class="fa-solid fa-file-circle-question"></i><h3>No examinations found</h3><p>Create an examination first to add questions.</p></div></div>`;
           return;
         }
-        const examId = selectedExamId || exams[0]._id;
-        const currentExam = exams.find((ex) => ex._id === examId) || exams[0];
+        const examId = selectedExamId || 'all';
+        const currentExam = examId === 'all' ? null : (exams.find((ex) => ex._id === examId) || null);
         const params = new URLSearchParams();
+        params.set('examId', examId);
         if (selectedCourse) params.set('course', selectedCourse);
         if (selectedBatch) params.set('batchNumber', selectedBatch);
-        const qs = params.toString();
-        const qData = await this.api(`/api/examinations/${examId}/questions${qs ? `?${qs}` : ''}`);
+        const qData = await this.api(`/api/questions?${params.toString()}`);
         const availableBatches = qData.batches || [];
         const availableCourses = qData.courses || [];
+
+        const deptCourseTitles = new Set();
+        const courseOptionsHtml = depts.map((d) => {
+          const courses = d.courses || [];
+          if (!courses.length) return '';
+          courses.forEach((c) => deptCourseTitles.add(c.title));
+          return `<optgroup label="${this.esc(d.name)} (${this.esc(d.code)})">
+            ${courses.map((c) => `<option value="${this.esc(c.title)}" ${selectedCourse === c.title ? 'selected' : ''}>${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('')}
+          </optgroup>`;
+        }).join('');
+        const extraCourses = availableCourses.filter((c) => !deptCourseTitles.has(c));
+        const extraOptionsHtml = extraCourses.length
+          ? `<optgroup label="Other / Exam Courses">
+              ${extraCourses.map((c) => `<option value="${this.esc(c)}" ${selectedCourse === c ? 'selected' : ''}>${this.esc(c)}</option>`).join('')}
+            </optgroup>`
+          : '';
 
         // Group saved questions batch-number wise
         const batchGroups = new Map();
@@ -3173,11 +3302,11 @@
 
         const renderBatchSections = () => {
           if (!qData.questions.length) {
-            return `<div class="empty-state"><i class="fa-solid fa-circle-question"></i><p>No questions saved for the selected filters yet. Click "+ Add Question" to add questions by batch number.</p></div>`;
+            return `<div class="empty-state"><i class="fa-solid fa-circle-question"></i><p>No questions saved for the selected filters yet. Click "+ Add Question" to add questions by course and batch number.</p></div>`;
           }
           return Array.from(batchGroups.entries()).map(([batchNum, items]) => {
             const batchMarks = items.reduce((sum, it) => sum + (Number(it.marks) || 0), 0);
-            const batchCourses = Array.from(new Set(items.map((it) => it.course || currentExam.course).filter(Boolean))).join(', ');
+            const batchCourses = Array.from(new Set(items.map((it) => it.course || (it.examination && it.examination.course) || (currentExam && currentExam.course)).filter(Boolean))).join(', ');
             return `
               <div style="border:1px solid var(--border-color);border-radius:10px;padding:16px;margin-bottom:18px;background:#F7FAFD;">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--border-color);">
@@ -3190,24 +3319,28 @@
                     <i class="fa-solid fa-plus"></i> Add to ${this.esc(batchNum)}
                   </button>
                 </div>
-                ${items.map((q, idx) => `
+                ${items.map((q, idx) => {
+                  const qExamCode = q.examination && q.examination.code ? q.examination.code : (currentExam ? currentExam.code : '');
+                  return `
                   <div class="exam-question-card" style="background:var(--white);margin-bottom:10px;">
                     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
                       <div>
                         <span class="badge badge-blue">Q${idx + 1} &bull; ${this.esc(q.type.toUpperCase())}</span>
                         <span class="badge badge-green">${q.marks} Marks</span>
                         <span class="badge badge-orange">Batch ${this.esc(q.batchNumber || batchNum)}</span>
+                        ${qExamCode ? `<span class="badge badge-muted">${this.esc(qExamCode)}</span>` : ''}
                         ${q.course ? `<span class="badge badge-teal">${this.esc(q.course)}</span>` : ''}
                         ${q.studyOption ? `<span class="badge badge-muted">${this.esc(q.studyOption)}</span>` : ''}
                         <span class="badge badge-muted">${this.esc(q.category)}</span>
                         <h4 style="margin-top:8px;font-size:14.5px;">${this.esc(q.prompt)}</h4>
                       </div>
-                      <button class="btn btn-danger btn-sm" onclick="App.deleteQuestion('${this.esc(q._id)}', '${this.esc(examId)}')"><i class="fa-solid fa-trash"></i></button>
+                      <button type="button" class="btn btn-danger btn-sm" data-del-qid="${this.esc(q._id)}"><i class="fa-solid fa-trash"></i></button>
                     </div>
                     ${q.options && q.options.length ? `<ul style="margin:10px 0 6px 20px;font-size:13px;">${q.options.map((o) => `<li><strong>${this.esc(o.label)}:</strong> ${this.esc(o.text)}</li>`).join('')}</ul>` : ''}
                     <div style="font-size:12.5px;color:var(--green);margin-top:6px;"><strong>Answer Key:</strong> ${this.esc(q.correctAnswer)}</div>
                     ${q.attachmentFileId ? `<div style="margin-top:6px;"><button type="button" onclick="App.downloadWithAuth('/api/files/${this.esc(q.attachmentFileId)}', '${this.esc(q.attachmentName || 'attachment')}')" class="btn btn-outline btn-sm"><i class="fa-solid fa-paperclip"></i> ${this.esc(q.attachmentName || 'Attachment')}</button></div>` : ''}
-                  </div>`).join('')}
+                  </div>`;
+                }).join('')}
               </div>`;
           }).join('');
         };
@@ -3216,14 +3349,16 @@
           <div class="card">
             <div class="toolbar">
               <div class="toolbar-filters">
-                <select id="qbExamSelect" class="form-control" style="max-width:290px;" title="Examination">
+                <select id="qbExamSelect" class="form-control" style="max-width:270px;" title="Examination">
+                  <option value="all" ${examId === 'all' ? 'selected' : ''}>All Examinations</option>
                   ${exams.map((ex) => `<option value="${this.esc(ex._id)}" ${ex._id === examId ? 'selected' : ''}>${this.esc(ex.code)} — ${this.esc(ex.title)}</option>`).join('')}
                 </select>
-                <select id="qbCourseFilter" class="form-control" style="max-width:220px;" title="Filter by Course">
-                  <option value="">All Courses</option>
-                  ${availableCourses.map((c) => `<option value="${this.esc(c)}" ${selectedCourse === c ? 'selected' : ''}>${this.esc(c)}</option>`).join('')}
+                <select id="qbCourseFilter" class="form-control" style="max-width:260px;" title="Filter by Course">
+                  <option value="">All Courses (${availableCourses.length})</option>
+                  ${courseOptionsHtml}
+                  ${extraOptionsHtml}
                 </select>
-                <select id="qbBatchFilter" class="form-control" style="max-width:180px;" title="Filter by Batch Number">
+                <select id="qbBatchFilter" class="form-control" style="max-width:170px;" title="Filter by Batch Number">
                   <option value="">All Batches</option>
                   ${availableBatches.map((b) => `<option value="${this.esc(b)}" ${selectedBatch === b ? 'selected' : ''}>Batch: ${this.esc(b)}</option>`).join('')}
                 </select>
@@ -3236,7 +3371,7 @@
         `;
 
         document.getElementById('qbExamSelect').addEventListener('change', (e) => {
-          this.loadQuestions(e.target.value, '', '');
+          this.loadQuestions(e.target.value, document.getElementById('qbCourseFilter').value, document.getElementById('qbBatchFilter').value);
         });
         document.getElementById('qbCourseFilter').addEventListener('change', (e) => {
           this.loadQuestions(examId, e.target.value, document.getElementById('qbBatchFilter').value);
@@ -3245,27 +3380,47 @@
           this.loadQuestions(examId, document.getElementById('qbCourseFilter').value, e.target.value);
         });
         document.getElementById('addQuestionBtn').addEventListener('click', () => {
-          this.openAddQuestionModal(examId, currentExam, availableBatches);
+          this.openAddQuestionModal(examId, currentExam, availableBatches, '', selectedCourse, exams);
         });
         document.querySelectorAll('[data-add-to-batch]').forEach((btn) => {
           btn.addEventListener('click', () => {
-            this.openAddQuestionModal(examId, currentExam, availableBatches, btn.getAttribute('data-add-to-batch'));
+            this.openAddQuestionModal(examId, currentExam, availableBatches, btn.getAttribute('data-add-to-batch'), selectedCourse, exams);
+          });
+        });
+        document.querySelectorAll('[data-del-qid]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            this.deleteQuestion(btn.getAttribute('data-del-qid'), examId, selectedCourse, selectedBatch);
           });
         });
       },
 
-      async openAddQuestionModal(examId, examObj = null, existingBatches = [], presetBatch = '') {
-        const depts = await this.ensureDepartments();
-        const defaultBatch = presetBatch || (examObj && examObj.batchNumber) || existingBatches[0] || 'BATCH-01';
+      async openAddQuestionModal(examId = 'all', examObj = null, existingBatches = [], presetBatch = '', presetCourse = '', examsList = null) {
+        const [depts, exams] = await Promise.all([
+          this.ensureDepartments(true),
+          examsList ? Promise.resolve(examsList) : this.api('/api/examinations').then((r) => r.examinations || []),
+        ]);
+        if (!exams.length) {
+          this.showToast('Create an examination first before adding questions.', 'warning');
+          return;
+        }
+        const initialExamId = examId && examId !== 'all' ? examId : exams[0]._id;
+        const resolvedExam = examObj || exams.find((ex) => ex._id === initialExamId) || exams[0];
+        const defaultBatch = presetBatch || (resolvedExam && resolvedExam.batchNumber) || existingBatches[0] || 'BATCH-01';
         const batchListId = 'qBatchSuggestions';
 
         this.showModal('Add Question (Course & Batch Wise)', `
           <form id="addQuestionForm">
+            <div class="form-group">
+              <label class="form-label">Examination</label>
+              <select id="qExamSelect" class="form-control">
+                ${exams.map((ex) => `<option value="${this.esc(ex._id)}" ${ex._id === initialExamId ? 'selected' : ''}>${this.esc(ex.code)} — ${this.esc(ex.title)}</option>`).join('')}
+              </select>
+            </div>
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">Department</label>
                 <select id="qDept" class="form-control">
-                  <option value="">-- All / Custom --</option>
+                  <option value="">-- All Departments (All Courses) --</option>
                   ${depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`).join('')}
                 </select>
               </div>
@@ -3326,39 +3481,35 @@
           </form>
         `, true);
 
+        const qExamSelEl = document.getElementById('qExamSelect');
         const qDeptEl = document.getElementById('qDept');
         const qCourseSelEl = document.getElementById('qCourseSelect');
         const qCourseCustomEl = document.getElementById('qCourseCustom');
         const qStudyEl = document.getElementById('qStudyOption');
 
-        const findMatchedDeptForExam = () => {
-          if (examObj && examObj.department) {
-            const byName = depts.find((d) => d.name === examObj.department);
-            if (byName) return byName;
-          }
-          if (examObj && examObj.course) {
-            const byCourse = depts.find((d) => (d.courses || []).some((c) => c.title.toLowerCase() === examObj.course.toLowerCase()));
-            if (byCourse) return byCourse;
-          }
-          return depts[0] || null;
+        const findMatchedDeptForCourse = (courseName) => {
+          if (!courseName) return null;
+          return depts.find((d) => (d.courses || []).some((c) => c.title.toLowerCase() === courseName.toLowerCase())) || null;
         };
 
         const syncQCourses = (preferCourse = '') => {
           const dept = depts.find((d) => d.name === qDeptEl.value);
-          const courses = dept && dept.courses ? dept.courses : depts.flatMap((d) => d.courses || []);
-          const uniqueTitles = [];
+          const courses = dept
+            ? (dept.courses || []).map((c) => ({ ...c, deptCode: dept.code }))
+            : depts.flatMap((d) => (d.courses || []).map((c) => ({ ...c, deptCode: d.code })));
+          const uniqueCourses = [];
           const seen = new Set();
           for (const c of courses) {
             if (!seen.has(c.title)) {
               seen.add(c.title);
-              uniqueTitles.push(c);
+              uniqueCourses.push(c);
             }
           }
           if (preferCourse && !seen.has(preferCourse)) {
-            uniqueTitles.unshift({ code: 'EXAM', title: preferCourse, studyOptions: ['Full-Time', 'Part-Time', 'Online'] });
+            uniqueCourses.unshift({ code: 'EXAM', deptCode: '', title: preferCourse, studyOptions: ['Full-Time', 'Part-Time', 'Online'] });
           }
           qCourseSelEl.innerHTML =
-            uniqueTitles.map((c) => `<option value="${this.esc(c.title)}">${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('') +
+            uniqueCourses.map((c) => `<option value="${this.esc(c.title)}">${!dept && c.deptCode ? `[${this.esc(c.deptCode)}] ` : ''}${this.esc(c.code)} — ${this.esc(c.title)}</option>`).join('') +
             `<option value="__custom__">Other / Custom Course...</option>`;
           if (preferCourse) qCourseSelEl.value = preferCourse;
           syncQStudy();
@@ -3374,15 +3525,32 @@
             ? matched.studyOptions
             : ['Full-Time', 'Part-Time', 'Online', 'Hybrid'];
           qStudyEl.innerHTML = opts.map((o) => `<option value="${this.esc(o)}">${this.esc(o)}</option>`).join('');
-          if (examObj && examObj.studyOption && opts.includes(examObj.studyOption)) {
-            qStudyEl.value = examObj.studyOption;
+          const selectedExam = exams.find((ex) => ex._id === qExamSelEl.value);
+          if (selectedExam && selectedExam.studyOption && opts.includes(selectedExam.studyOption)) {
+            qStudyEl.value = selectedExam.studyOption;
           }
         };
 
-        const initialDept = findMatchedDeptForExam();
-        if (initialDept) qDeptEl.value = initialDept.name;
-        syncQCourses(examObj ? examObj.course : '');
+        const initialPreferredCourse = presetCourse || (examObj ? examObj.course : '');
+        const matchedDept = initialPreferredCourse ? findMatchedDeptForCourse(initialPreferredCourse) : null;
+        if (matchedDept) {
+          qDeptEl.value = matchedDept.name;
+        } else if (examObj && examObj.department) {
+          qDeptEl.value = examObj.department;
+        } else {
+          qDeptEl.value = '';
+        }
+        syncQCourses(initialPreferredCourse);
 
+        qExamSelEl.addEventListener('change', () => {
+          const selEx = exams.find((ex) => ex._id === qExamSelEl.value);
+          if (selEx && !presetCourse) {
+            const d = findMatchedDeptForCourse(selEx.course);
+            if (d) qDeptEl.value = d.name;
+            else if (selEx.department) qDeptEl.value = selEx.department;
+            syncQCourses(selEx.course);
+          }
+        });
         qDeptEl.addEventListener('change', () => syncQCourses(''));
         qCourseSelEl.addEventListener('change', syncQStudy);
 
@@ -3393,17 +3561,19 @@
         document.getElementById('addQuestionForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           try {
+            const targetExamId = qExamSelEl.value;
             let attachmentFileId = null;
             let attachmentName = '';
             const fileInput = document.getElementById('qFile');
             if (fileInput.files && fileInput.files[0]) {
-              const up = await this.uploadFile(fileInput.files[0], 'question_file', examId);
+              const up = await this.uploadFile(fileInput.files[0], 'question_file', targetExamId);
               attachmentFileId = up.file.id;
               attachmentName = up.file.filename;
             }
             const type = document.getElementById('qType').value;
             const selectedCourse = qCourseSelEl.value === '__custom__' ? qCourseCustomEl.value : qCourseSelEl.value;
             const batchNumber = document.getElementById('qBatchNumber').value;
+            const resolvedDept = qDeptEl.value || (findMatchedDeptForCourse(selectedCourse) ? findMatchedDeptForCourse(selectedCourse).name : '');
             const options =
               type === 'mcq'
                 ? [
@@ -3413,10 +3583,10 @@
                     { label: 'D', text: document.getElementById('optD').value },
                   ].filter((o) => o.text.trim())
                 : [];
-            const res = await this.api(`/api/examinations/${examId}/questions`, {
+            const res = await this.api(`/api/examinations/${targetExamId}/questions`, {
               method: 'POST',
               body: {
-                department: qDeptEl.value,
+                department: resolvedDept,
                 course: selectedCourse,
                 studyOption: qStudyEl.value,
                 batchNumber,
@@ -3432,18 +3602,18 @@
             });
             this.closeModal();
             this.showToast(res.message, 'success');
-            this.loadQuestions(examId);
+            this.loadQuestions(examId, presetCourse);
           } catch (err) {
             this.showToast(err.message, 'error');
           }
         });
       },
 
-      async deleteQuestion(qid, examId) {
+      async deleteQuestion(qid, examId = 'all', selectedCourse = '', selectedBatch = '') {
         try {
           await this.api(`/api/questions/${qid}`, { method: 'DELETE' });
           this.showToast('Question removed.', 'success');
-          this.loadQuestions(examId);
+          this.loadQuestions(examId, selectedCourse, selectedBatch);
         } catch (err) {
           this.showToast(err.message, 'error');
         }

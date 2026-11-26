@@ -2542,8 +2542,29 @@ function registerRoutes() {
         return res.status(404).json({ success: false, message: 'Department not found.' });
       }
 
-      if (req.body.name) dept.name = cleanString(req.body.name, 100);
-      if (req.body.code) dept.code = cleanString(req.body.code, 24).toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      const oldName = dept.name;
+      const nextName = req.body.name ? cleanString(req.body.name, 100) : dept.name;
+      const nextCode = req.body.code
+        ? cleanString(req.body.code, 24).toUpperCase().replace(/[^A-Z0-9_-]/g, '')
+        : dept.code;
+
+      if (nextName.length < 2 || nextCode.length < 2) {
+        return res.status(400).json({ success: false, message: 'Department name and code (min 2 chars) are required.' });
+      }
+
+      const duplicate = await Department.findOne({
+        _id: { $ne: dept._id },
+        $or: [
+          { name: new RegExp(`^${nextName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+          { code: nextCode },
+        ],
+      });
+      if (duplicate) {
+        return res.status(409).json({ success: false, message: 'Another department with this name or code already exists.' });
+      }
+
+      dept.name = nextName;
+      dept.code = nextCode;
       if (typeof req.body.description === 'string') dept.description = cleanString(req.body.description, 500);
       if (['active', 'inactive'].includes(req.body.status)) dept.status = req.body.status;
       if (Array.isArray(req.body.courses)) {
@@ -2555,8 +2576,17 @@ function registerRoutes() {
       }
 
       await dept.save();
-      await recordActivity(req, 'DEPARTMENT_UPDATED', 'Department', dept._id, `Updated department ${dept.name}`);
-      return res.json({ success: true, message: 'Department updated.', department: dept });
+
+      if (oldName !== dept.name) {
+        await Promise.all([
+          StudentProfile.updateMany({ department: oldName }, { $set: { department: dept.name } }),
+          Examination.updateMany({ department: oldName }, { $set: { department: dept.name } }),
+          Question.updateMany({ department: oldName }, { $set: { department: dept.name } }),
+        ]);
+      }
+
+      await recordActivity(req, 'DEPARTMENT_UPDATED', 'Department', dept._id, `Updated department ${dept.name} (${dept.code})`);
+      return res.json({ success: true, message: `Department "${dept.name}" updated.`, department: dept });
     } catch (err) {
       return next(err);
     }
@@ -2584,6 +2614,56 @@ function registerRoutes() {
       await dept.save();
       await recordActivity(req, 'COURSE_ADDED', 'Department', dept._id, `Added course ${course.code} to ${dept.name}`);
       return res.status(201).json({ success: true, message: `Course "${course.title}" added to ${dept.name}.`, department: dept });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.put('/api/departments/:id/courses/:courseId', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id) || !isValidObjectId(req.params.courseId)) {
+        return res.status(400).json({ success: false, message: 'Invalid identifier.' });
+      }
+      const dept = await Department.findById(req.params.id);
+      if (!dept) {
+        return res.status(404).json({ success: false, message: 'Department not found.' });
+      }
+      const courseDoc = dept.courses.id(req.params.courseId);
+      if (!courseDoc) {
+        return res.status(404).json({ success: false, message: 'Course not found in this department.' });
+      }
+
+      const [updated] = normalizeCoursesInput([req.body]);
+      if (!updated) {
+        return res.status(400).json({ success: false, message: 'Valid course code, title, and study options are required.' });
+      }
+
+      const duplicate = dept.courses.some(
+        (c) =>
+          String(c._id) !== req.params.courseId &&
+          (c.code === updated.code || c.title.toLowerCase() === updated.title.toLowerCase())
+      );
+      if (duplicate) {
+        return res.status(409).json({ success: false, message: 'Another course in this department already uses that code or title.' });
+      }
+
+      const oldTitle = courseDoc.title;
+      courseDoc.code = updated.code;
+      courseDoc.title = updated.title;
+      courseDoc.credits = updated.credits;
+      courseDoc.studyOptions = updated.studyOptions;
+
+      await dept.save();
+
+      if (oldTitle !== updated.title) {
+        await Promise.all([
+          Examination.updateMany({ course: oldTitle }, { $set: { course: updated.title } }),
+          Question.updateMany({ course: oldTitle }, { $set: { course: updated.title } }),
+        ]);
+      }
+
+      await recordActivity(req, 'COURSE_UPDATED', 'Department', dept._id, `Updated course ${updated.code} (${updated.title}) in ${dept.name}`);
+      return res.json({ success: true, message: `Course "${updated.title}" updated.`, department: dept });
     } catch (err) {
       return next(err);
     }
@@ -2833,6 +2913,50 @@ function registerRoutes() {
     }
   });
 
+  app.get('/api/questions', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      const filter = {};
+      const examId = cleanString(req.query.examId || '', 60);
+      if (examId && examId !== 'all') {
+        if (!isValidObjectId(examId)) {
+          return res.status(400).json({ success: false, message: 'Invalid examination ID.' });
+        }
+        filter.examination = examId;
+      }
+      const courseFilter = cleanString(req.query.course || '', 120);
+      const batchFilter = cleanString(req.query.batchNumber || '', 60).toUpperCase();
+      if (courseFilter) filter.course = courseFilter;
+      if (batchFilter) filter.batchNumber = batchFilter;
+
+      const scopeFilter = filter.examination ? { examination: filter.examination } : {};
+      const [questions, scopeQuestions, allDepts, allExams] = await Promise.all([
+        Question.find(filter)
+          .populate('examination', 'code title course department')
+          .sort({ batchNumber: 1, order: 1, createdAt: 1 })
+          .lean(),
+        Question.find(scopeFilter).select('batchNumber course').lean(),
+        Department.find({}).select('name code courses').lean(),
+        Examination.find({}).select('course').lean(),
+      ]);
+
+      const batches = Array.from(
+        new Set(scopeQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()))
+      ).sort();
+      const deptCourses = allDepts.flatMap((d) => (d.courses || []).map((c) => c.title).filter(Boolean));
+      const courses = Array.from(
+        new Set([
+          ...deptCourses,
+          ...allExams.map((e) => e.course).filter(Boolean),
+          ...scopeQuestions.map((q) => q.course).filter(Boolean),
+        ])
+      ).sort();
+
+      return res.json({ success: true, questions, batches, courses });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
   app.get('/api/examinations/:id/questions', requireAuth, async (req, res, next) => {
     try {
       if (!isValidObjectId(req.params.id)) {
@@ -2873,16 +2997,18 @@ function registerRoutes() {
       if (!isAdmin) {
         query.select('-correctAnswer');
       }
-      const [questions, allExamQuestions] = await Promise.all([
+      const [questions, allExamQuestions, allDepts] = await Promise.all([
         query.lean(),
         isAdmin ? Question.find({ examination: exam._id }).select('batchNumber course').lean() : Promise.resolve([]),
+        isAdmin ? Department.find({}).select('courses').lean() : Promise.resolve([]),
       ]);
 
       const batches = Array.from(
         new Set(allExamQuestions.map((q) => (q.batchNumber || 'BATCH-01').toUpperCase()))
       ).sort();
+      const deptCourses = allDepts.flatMap((d) => (d.courses || []).map((c) => c.title).filter(Boolean));
       const courses = Array.from(
-        new Set([exam.course, ...allExamQuestions.map((q) => q.course).filter(Boolean)])
+        new Set([exam.course, ...deptCourses, ...allExamQuestions.map((q) => q.course).filter(Boolean)])
       ).sort();
 
       return res.json({ success: true, examination: exam, questions, batches, courses });
