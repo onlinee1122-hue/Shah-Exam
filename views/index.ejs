@@ -1134,6 +1134,9 @@
         <button type="button" class="auth-tab-btn" data-auth-tab="register">
           <i class="fa-solid fa-user-plus"></i> Register
         </button>
+        <button type="button" class="auth-tab-btn" data-auth-tab="verify">
+          <i class="fa-solid fa-certificate"></i> Verify Cert
+        </button>
         <% if (needsAdminSetup) { %>
         <button type="button" class="auth-tab-btn" data-auth-tab="setup" id="setupTabBtn">
           <i class="fa-solid fa-shield-halved"></i> Admin Setup
@@ -1209,9 +1212,17 @@
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label" for="regPhone">Phone Number</label>
-              <input id="regPhone" name="phone" type="text" class="form-control" placeholder="+1 (555) 010-2000" />
+              <label class="form-label" for="regBatch">Allocated Batch Number</label>
+              <select id="regBatch" name="batchNumber" class="form-control" required>
+                <option value="BATCH-01">BATCH-01</option>
+                <option value="BATCH-02">BATCH-02</option>
+                <option value="BATCH-03">BATCH-03</option>
+              </select>
             </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="regPhone">Phone Number</label>
+            <input id="regPhone" name="phone" type="text" class="form-control" placeholder="+1 (555) 010-2000" />
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -1236,6 +1247,26 @@
             <i class="fa-solid fa-user-plus"></i> Create Student Account
           </button>
         </form>
+
+        <!-- PUBLIC CERTIFICATE VERIFICATION PANEL -->
+        <div id="verifyCertPanel" class="hidden">
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+            Enter the Certificate Number printed on any EduPulse certificate to verify its authenticity, student details, course, batch, and grade.
+          </p>
+          <form id="verifyCertForm">
+            <div class="form-group">
+              <label class="form-label" for="verifyCertInput">Certificate Number</label>
+              <div class="input-wrap">
+                <i class="fa-solid fa-certificate input-icon"></i>
+                <input id="verifyCertInput" type="text" class="form-control" placeholder="e.g. CERT-2026-A1B2C3D4" required style="text-transform:uppercase;" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block" id="verifyCertSubmitBtn">
+              <i class="fa-solid fa-shield-check"></i> Verify Certificate
+            </button>
+          </form>
+          <div id="verifyCertResult" style="margin-top:16px;"></div>
+        </div>
 
         <!-- FORGOT PASSWORD FORM -->
         <form id="forgotForm" class="hidden">
@@ -1449,6 +1480,15 @@
             if (regSelect) {
               regSelect.innerHTML = res.departments
                 .map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)} (${this.esc(d.code)})</option>`)
+                .join('');
+            }
+          }
+          if (res && Array.isArray(res.batches) && res.batches.length) {
+            this.batches = res.batches;
+            const regBatchSel = document.getElementById('regBatch');
+            if (regBatchSel) {
+              regBatchSel.innerHTML = res.batches
+                .map((b) => `<option value="${this.esc(b.batchNumber)}">${this.esc(b.batchNumber)}${b.course ? ` (${this.esc(b.course)})` : ''}</option>`)
                 .join('');
             }
           }
@@ -1678,6 +1718,18 @@
           this.switchAuthTab('reset');
           return;
         }
+        const verifyCert = urlParams.get('verifyCert');
+        if (verifyCert) {
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+          this.showAuthScreen();
+          this.switchAuthTab('verify');
+          const input = document.getElementById('verifyCertInput');
+          if (input) input.value = verifyCert;
+          await this.runCertificateVerification(verifyCert, 'verifyCertResult');
+          return;
+        }
         try {
           const res = await this.api('/api/auth/me');
           this.user = res.user;
@@ -1760,6 +1812,7 @@
                 name: document.getElementById('regName').value,
                 email: document.getElementById('regEmail').value,
                 department: document.getElementById('regDepartment').value,
+                batchNumber: document.getElementById('regBatch').value,
                 phone: document.getElementById('regPhone').value,
                 password: document.getElementById('regPassword').value,
                 confirmPassword: document.getElementById('regConfirm').value,
@@ -1775,6 +1828,16 @@
             btn.disabled = false;
           }
         });
+
+        // Public certificate verification submit
+        const verifyForm = document.getElementById('verifyCertForm');
+        if (verifyForm) {
+          verifyForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const code = document.getElementById('verifyCertInput').value;
+            await this.runCertificateVerification(code, 'verifyCertResult');
+          });
+        }
 
         // Forgot password submit
         document.getElementById('forgotForm').addEventListener('submit', async (e) => {
@@ -1903,13 +1966,14 @@
         document.querySelectorAll('.auth-tab-btn').forEach((b) => {
           b.classList.toggle('active', b.getAttribute('data-auth-tab') === tab);
         });
-        ['loginForm', 'registerForm', 'forgotForm', 'resetPasswordForm', 'setupAdminForm'].forEach((id) => {
+        ['loginForm', 'registerForm', 'verifyCertPanel', 'forgotForm', 'resetPasswordForm', 'setupAdminForm'].forEach((id) => {
           const el = document.getElementById(id);
           if (el) el.classList.add('hidden');
         });
         const map = {
           login: 'loginForm',
           register: 'registerForm',
+          verify: 'verifyCertPanel',
           forgot: 'forgotForm',
           reset: 'resetPasswordForm',
           setup: 'setupAdminForm',
@@ -2000,6 +2064,7 @@
                   { view: 'questions', icon: 'fa-circle-question', text: 'Question Bank' },
                   { view: 'submissions', icon: 'fa-clipboard-check', text: 'Submissions & Grading' },
                   { view: 'results', icon: 'fa-award', text: 'Results' },
+                  { view: 'certificates', icon: 'fa-certificate', text: 'Certificates' },
                 ],
               },
               {
@@ -2029,6 +2094,7 @@
                   { view: 'examinations', icon: 'fa-file-pen', text: 'Examinations' },
                   { view: 'submissions', icon: 'fa-list-check', text: 'My Submissions' },
                   { view: 'results', icon: 'fa-award', text: 'Published Results' },
+                  { view: 'certificates', icon: 'fa-certificate', text: 'My Certificates' },
                 ],
               },
               {
@@ -2119,6 +2185,9 @@
               break;
             case 'results':
               await this.loadResults();
+              break;
+            case 'certificates':
+              await this.loadCertificates();
               break;
             case 'wallet':
               await this.loadWallet();
@@ -2328,14 +2397,19 @@
               <div class="card profile-summary-card">
                 <div class="profile-avatar-lg">${avatarHtml}</div>
                 <h3 style="font-size:17px;font-weight:700;">${this.esc(this.user.name)}</h3>
-                <div style="margin:6px 0;"><span class="badge badge-blue">${this.esc(p.studentId || 'STUDENT')}</span></div>
+                <div style="margin:6px 0;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;">
+                  <span class="badge badge-blue">${this.esc(p.studentId || 'STUDENT')}</span>
+                  <span class="badge badge-teal"><i class="fa-solid fa-layer-group"></i> ${this.esc(p.batchNumber || 'BATCH-01')}</span>
+                </div>
                 <p style="font-size:12.5px;color:var(--text-muted);">${this.esc(p.department || 'Academic Program')}</p>
 
                 <div class="profile-meta-list">
                   <div class="profile-meta-item"><span>Email</span><strong>${this.esc(this.user.email)}</strong></div>
+                  <div class="profile-meta-item"><span>Allocated Batch</span><strong><span class="badge badge-teal">${this.esc(p.batchNumber || 'BATCH-01')}</span></strong></div>
                   <div class="profile-meta-item"><span>Phone</span><span>${this.esc(p.phone || 'Not set')}</span></div>
                   <div class="profile-meta-item"><span>Program</span><span>${this.esc(p.program || '—')}</span></div>
                   <div class="profile-meta-item"><span>Enrolled</span><span>${this.fmtDate(p.enrollmentDate)}</span></div>
+                  <div class="profile-meta-item"><span>Certificates</span><a href="#" onclick="event.preventDefault();App.navigate('certificates')"><strong>${s.certificatesCount || 0} Issued</strong></a></div>
                   <div class="profile-meta-item"><span>Status</span><span class="badge badge-green">${this.esc(this.user.status)}</span></div>
                 </div>
 
@@ -2491,7 +2565,7 @@
               <table>
                 <thead>
                   <tr>
-                    <th>Student ID</th><th>Name</th><th>Email</th><th>Department</th><th>Wallet</th><th>Status</th><th>Actions</th>
+                    <th>Student ID</th><th>Name</th><th>Email</th><th>Department</th><th>Allocated Batch</th><th>Wallet</th><th>Status</th><th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2501,6 +2575,7 @@
                       <td>${this.esc(st.name)}</td>
                       <td>${this.esc(st.email)}</td>
                       <td>${this.esc(st.department)}</td>
+                      <td><span class="badge badge-teal">${this.esc(st.batchNumber || 'BATCH-01')}</span></td>
                       <td>${this.fmtMoney(st.walletBalance)}</td>
                       <td><span class="badge ${st.status === 'active' ? 'badge-green' : 'badge-red'}">${this.esc(st.status)}</span></td>
                       <td>
@@ -2510,7 +2585,7 @@
                           <button class="btn btn-danger btn-sm" onclick="App.deleteStudent('${this.esc(st.id)}', '${this.esc(st.name)}')" title="Remove"><i class="fa-solid fa-trash"></i></button>
                         </div>
                       </td>
-                    </tr>`).join('') : `<tr><td colspan="7" class="empty-state">No students match the selected filters.</td></tr>`}
+                    </tr>`).join('') : `<tr><td colspan="8" class="empty-state">No students match the selected filters.</td></tr>`}
                 </tbody>
               </table>
             </div>
@@ -2543,7 +2618,11 @@
       },
 
       async openCreateStudentModal() {
-        const depts = await this.ensureDepartments();
+        const [depts, batches] = await Promise.all([
+          this.ensureDepartments(true),
+          this.ensureBatches(true),
+        ]);
+        const activeBatches = batches.filter((b) => b.status === 'active');
         this.showModal('Register New Student', `
           <form id="createStudentForm">
             <div class="form-row">
@@ -2557,27 +2636,47 @@
                   ${depts.length ? depts.map((d) => `<option value="${this.esc(d.name)}">${this.esc(d.name)}</option>`).join('') : '<option value="Computer Science">Computer Science</option>'}
                 </select>
               </div>
-              <div class="form-group"><label class="form-label">Initial Wallet ($)</label><input id="csWallet" type="number" min="0" step="0.01" class="form-control" value="250" /></div>
+              <div class="form-group">
+                <label class="form-label">Allocated Batch Number</label>
+                <select id="csBatchSelect" class="form-control">
+                  ${activeBatches.length ? activeBatches.map((b) => `<option value="${this.esc(b.batchNumber)}">${this.esc(b.batchNumber)}</option>`).join('') : '<option value="BATCH-01">BATCH-01</option>'}
+                  <option value="__new_batch__">+ Add New Batch Number...</option>
+                </select>
+                <input id="csBatchCustom" class="form-control hidden" style="margin-top:6px;" placeholder="e.g. BATCH-04" />
+              </div>
             </div>
-            <div class="form-group"><label class="form-label">Temporary Password (min 8 chars, A-z &amp; 0-9)</label><input id="csPassword" type="password" class="form-control" required /></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Initial Wallet ($)</label><input id="csWallet" type="number" min="0" step="0.01" class="form-control" value="250" /></div>
+              <div class="form-group"><label class="form-label">Temporary Password (min 8 chars, A-z &amp; 0-9)</label><input id="csPassword" type="password" class="form-control" required /></div>
+            </div>
             <button type="submit" class="btn btn-primary btn-block">Create Student Account</button>
           </form>
         `);
+        const csBatchSel = document.getElementById('csBatchSelect');
+        const csBatchCustom = document.getElementById('csBatchCustom');
+        csBatchSel.addEventListener('change', () => {
+          const isNew = csBatchSel.value === '__new_batch__';
+          csBatchCustom.classList.toggle('hidden', !isNew);
+          csBatchCustom.required = isNew;
+        });
         document.getElementById('createStudentForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           try {
+            const batchNumber = csBatchSel.value === '__new_batch__' ? csBatchCustom.value : csBatchSel.value;
             const res = await this.api('/api/students', {
               method: 'POST',
               body: {
                 name: document.getElementById('csName').value,
                 email: document.getElementById('csEmail').value,
                 department: document.getElementById('csDept').value,
+                batchNumber,
                 initialBalance: Number(document.getElementById('csWallet').value),
                 password: document.getElementById('csPassword').value,
               },
             });
             this.closeModal();
             this.showToast(res.message, 'success');
+            await this.ensureBatches(true);
             this.navigate('students');
           } catch (err) {
             this.showToast(err.message, 'error');
@@ -2593,10 +2692,14 @@
           <div style="display:grid;gap:12px;">
             <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;">
               <div><strong>${this.esc(p.studentId)}</strong> &bull; ${this.esc(st.email)}</div>
-              <span class="badge ${st.status === 'active' ? 'badge-green' : 'badge-red'}">${this.esc(st.status)}</span>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <span class="badge badge-teal">${this.esc(p.batchNumber || 'BATCH-01')}</span>
+                <span class="badge ${st.status === 'active' ? 'badge-green' : 'badge-red'}">${this.esc(st.status)}</span>
+              </div>
             </div>
             <div class="form-row">
               <div><small style="color:var(--text-muted);">Department</small><div>${this.esc(p.department)}</div></div>
+              <div><small style="color:var(--text-muted);">Allocated Batch</small><div><strong>${this.esc(p.batchNumber || 'BATCH-01')}</strong></div></div>
               <div><small style="color:var(--text-muted);">Wallet Balance</small><div><strong>${this.fmtMoney(st.wallet ? st.wallet.balance : 0)}</strong></div></div>
             </div>
             <h4 style="margin-top:8px;">Examination History (${st.submissions.length})</h4>
@@ -2618,9 +2721,15 @@
       },
 
       async openEditStudentModal(id) {
-        const res = await this.api(`/api/students/${id}`);
+        const [res, batches] = await Promise.all([
+          this.api(`/api/students/${id}`),
+          this.ensureBatches(true),
+        ]);
         const st = res.student;
         const p = st.profile || {};
+        const curBatch = p.batchNumber || 'BATCH-01';
+        const activeBatches = batches.filter((b) => b.status === 'active');
+        const batchOptions = Array.from(new Set([curBatch, ...activeBatches.map((b) => b.batchNumber)])).filter(Boolean);
         this.showModal(`Edit Student — ${st.name}`, `
           <form id="editStudentForm">
             <div class="form-row">
@@ -2636,9 +2745,19 @@
             </div>
             <div class="form-row">
               <div class="form-group"><label class="form-label">Department</label><input id="esDept" class="form-control" value="${this.esc(p.department)}" /></div>
-              <div class="form-group"><label class="form-label">Phone</label><input id="esPhone" class="form-control" value="${this.esc(p.phone)}" /></div>
+              <div class="form-group">
+                <label class="form-label">Allocated Batch Number</label>
+                <select id="esBatchSelect" class="form-control">
+                  ${batchOptions.map((bn) => `<option value="${this.esc(bn)}" ${curBatch === bn ? 'selected' : ''}>${this.esc(bn)}</option>`).join('')}
+                  <option value="__new_batch__">+ Add New Batch Number...</option>
+                </select>
+                <input id="esBatchCustom" class="form-control hidden" style="margin-top:6px;" placeholder="e.g. BATCH-04" />
+              </div>
             </div>
-            <div class="form-group"><label class="form-label">Semester</label><input id="esSem" class="form-control" value="${this.esc(p.semester)}" /></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Phone</label><input id="esPhone" class="form-control" value="${this.esc(p.phone)}" /></div>
+              <div class="form-group"><label class="form-label">Semester</label><input id="esSem" class="form-control" value="${this.esc(p.semester)}" /></div>
+            </div>
             <button type="submit" class="btn btn-primary btn-block">Save Changes</button>
           </form>
           <hr style="border:none;border-top:1px solid var(--border-color);margin:18px 0;" />
@@ -2652,21 +2771,31 @@
             </div>
           </form>
         `);
+        const esBatchSel = document.getElementById('esBatchSelect');
+        const esBatchCustom = document.getElementById('esBatchCustom');
+        esBatchSel.addEventListener('change', () => {
+          const isNew = esBatchSel.value === '__new_batch__';
+          esBatchCustom.classList.toggle('hidden', !isNew);
+          esBatchCustom.required = isNew;
+        });
         document.getElementById('editStudentForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           try {
+            const batchNumber = esBatchSel.value === '__new_batch__' ? esBatchCustom.value : esBatchSel.value;
             const out = await this.api(`/api/students/${id}`, {
               method: 'PUT',
               body: {
                 name: document.getElementById('esName').value,
                 status: document.getElementById('esStatus').value,
                 department: document.getElementById('esDept').value,
+                batchNumber,
                 phone: document.getElementById('esPhone').value,
                 semester: document.getElementById('esSem').value,
               },
             });
             this.closeModal();
             this.showToast(out.message, 'success');
+            await this.ensureBatches(true);
             this.loadStudents();
           } catch (err) {
             this.showToast(err.message, 'error');
@@ -2718,8 +2847,16 @@
 
         const data = await this.api('/api/examinations');
         const exams = data.examinations;
+        const studentBatch = data.studentBatch || (this.user && this.user.batchNumber) || '';
 
         document.getElementById('appContent').innerHTML = `
+          ${!isAdmin && studentBatch ? `
+            <div class="card" style="margin-bottom:16px;padding:12px 16px;background:#EEF6FC;border:1px solid #C8DFF5;">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                <span style="font-size:13px;"><i class="fa-solid fa-layer-group" style="color:var(--theme-light);margin-right:6px;"></i>Displaying examinations and batch-matched questions allocated to your batch:</span>
+                <span class="badge badge-teal">${this.esc(studentBatch)}</span>
+              </div>
+            </div>` : ''}
           <div class="card">
             <div class="table-wrap">
               <table>
@@ -2734,7 +2871,13 @@
                       ex.status === 'published' ? 'badge-green' : ex.status === 'draft' ? 'badge-orange' : 'badge-muted';
                     let studentAction = '';
                     if (!isAdmin) {
-                      if (ex.myResult) {
+                      if (ex.myCertificate) {
+                        studentAction = `
+                          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                            ${ex.myResult ? `<span class="badge badge-teal">${ex.myResult.percentage}% (${this.esc(ex.myResult.grade)})</span>` : '<span class="badge badge-blue">Submitted</span>'}
+                            <button type="button" class="btn btn-success btn-sm" data-dl-cert="${this.esc(ex.myCertificate.id)}" data-cert-num="${this.esc(ex.myCertificate.certificateNumber)}"><i class="fa-solid fa-file-pdf"></i> PDF</button>
+                          </div>`;
+                      } else if (ex.myResult) {
                         studentAction = `<span class="badge badge-teal">Scored ${ex.myResult.percentage}% (${this.esc(ex.myResult.grade)})</span>`;
                       } else if (ex.mySubmission && ex.mySubmission.status !== 'in_progress') {
                         studentAction = `<span class="badge badge-blue">Submitted</span>`;
@@ -2751,7 +2894,7 @@
                       </td>
                       <td>${this.fmtDate(ex.examDate)}</td>
                       <td>${ex.durationMinutes} min</td>
-                      <td>${ex.totalMarks} (Pass: ${ex.passingMarks})</td>
+                      <td>${ex.configuredMarks || ex.totalMarks} (Pass: ${ex.passingMarks})</td>
                       <td>${ex.questionCount} items</td>
                       <td><span class="badge ${statusBadge}">${this.esc(ex.status)}</span></td>
                       <td>
@@ -2764,12 +2907,19 @@
                         ` : studentAction}
                       </td>
                     </tr>`;
-                  }).join('') : `<tr><td colspan="8" class="empty-state">No examinations available.</td></tr>`}
+                  }).join('') : `<tr><td colspan="8" class="empty-state">No examinations available for your batch yet.</td></tr>`}
                 </tbody>
               </table>
             </div>
           </div>
         `;
+        document.getElementById('appContent').querySelectorAll('[data-dl-cert]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const cid = btn.getAttribute('data-dl-cert');
+            const cnum = btn.getAttribute('data-cert-num') || 'Certificate';
+            this.downloadWithAuth(`/api/certificates/${cid}/pdf`, `${cnum}.pdf`);
+          });
+        });
       },
 
       // ---------------- 2B. DEPARTMENTS & COURSES (ADMIN) ----------------
@@ -4037,7 +4187,37 @@
             });
             clearInterval(this.examTimerInterval);
             this.showToast(out.message, 'success');
-            this.navigate('submissions');
+            if (out.certificate) {
+              const cert = out.certificate;
+              const verifyUrl = `${window.location.origin}/?verifyCert=${encodeURIComponent(cert.certificateNumber)}`;
+              this.showModal('Examination Submitted & Certificate Ready', `
+                <div style="text-align:center;padding:8px 4px;">
+                  <div style="width:54px;height:54px;border-radius:50%;background:rgba(39,174,96,0.12);color:var(--green);display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px;">
+                    <i class="fa-solid fa-certificate"></i>
+                  </div>
+                  <h4 style="margin-bottom:6px;">Certificate No: ${this.esc(cert.certificateNumber)}</h4>
+                  <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+                    Issued for <strong>${this.esc(cert.courseName)}</strong> (Batch ${this.esc(cert.batchNumber)}) &bull; Grade <strong>${this.esc(cert.grade)}</strong> (${cert.percentage}%)
+                  </p>
+                  <div style="background:#F3F7FB;padding:10px;border-radius:8px;font-size:12px;margin-bottom:16px;word-break:break-all;">
+                    <strong>Verification Link:</strong> ${this.esc(verifyUrl)}
+                  </div>
+                  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-success" id="modalDlCertPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF Certificate</button>
+                    <button type="button" class="btn btn-primary" id="modalGoCertsBtn"><i class="fa-solid fa-award"></i> View All Certificates</button>
+                  </div>
+                </div>
+              `);
+              document.getElementById('modalDlCertPdfBtn').addEventListener('click', () => {
+                this.downloadWithAuth(`/api/certificates/${cert._id}/pdf`, `${cert.certificateNumber}.pdf`);
+              });
+              document.getElementById('modalGoCertsBtn').addEventListener('click', () => {
+                this.closeModal();
+                this.navigate('certificates');
+              });
+            } else {
+              this.navigate('submissions');
+            }
           } catch (err) {
             this.showToast(err.message, 'error');
             btn.disabled = false;
@@ -4085,13 +4265,16 @@
       async openSubmissionDetail(subId) {
         const isAdmin = this.user.role === 'admin';
         const data = await this.api(`/api/submissions/${subId}`);
-        const { submission, questions, result } = data;
+        const { submission, questions, result, certificate } = data;
         const ansMap = new Map((submission.answers || []).map((a) => [String(a.question), a]));
 
         const bodyHtml = `
-          <div style="margin-bottom:14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
             <div><strong>${this.esc(submission.examination.code)}</strong> — ${this.esc(submission.examination.title)}</div>
-            <div>Student: <strong>${this.esc(submission.student.name)}</strong></div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span>Student: <strong>${this.esc(submission.student.name)}</strong></span>
+              ${certificate ? `<button type="button" class="btn btn-success btn-sm" id="subCertPdfBtn"><i class="fa-solid fa-file-pdf"></i> Certificate (${this.esc(certificate.certificateNumber)})</button>` : ''}
+            </div>
           </div>
           ${submission.answerFiles && submission.answerFiles.length ? `
             <div style="margin-bottom:14px;">
@@ -4132,6 +4315,11 @@
         `;
 
         this.showModal(`Submission Review`, bodyHtml, true);
+        if (certificate && document.getElementById('subCertPdfBtn')) {
+          document.getElementById('subCertPdfBtn').addEventListener('click', () => {
+            this.downloadWithAuth(`/api/certificates/${certificate._id}/pdf`, `${certificate.certificateNumber}.pdf`);
+          });
+        }
         if (isAdmin) {
           document.getElementById('evaluateForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -4175,7 +4363,7 @@
                 <thead>
                   <tr>
                     ${isAdmin ? '<th>Student</th>' : ''}
-                    <th>Examination</th><th>Score</th><th>Percentage</th><th>Grade</th><th>Outcome</th><th>Published</th><th>Feedback</th>
+                    <th>Examination</th><th>Score</th><th>Percentage</th><th>Grade</th><th>Outcome</th><th>Published</th><th>Feedback</th><th>Certificate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4192,12 +4380,176 @@
                       <td><span class="badge ${r.passed ? 'badge-green' : 'badge-red'}">${r.passed ? 'Passed' : 'Needs Review'}</span></td>
                       <td>${r.published ? this.fmtDate(r.publishedAt) : '<span class="badge badge-orange">Draft</span>'}</td>
                       <td>${this.esc(r.feedback || '—')}</td>
-                    </tr>`).join('') : `<tr><td colspan="${isAdmin ? 8 : 7}" class="empty-state">No published results yet.</td></tr>`}
+                      <td>
+                        ${r.certificate ? `<button type="button" class="btn btn-success btn-sm" data-res-cert-id="${this.esc(r.certificate._id)}" data-res-cert-num="${this.esc(r.certificate.certificateNumber)}"><i class="fa-solid fa-file-pdf"></i> PDF</button>` : '—'}
+                      </td>
+                    </tr>`).join('') : `<tr><td colspan="${isAdmin ? 9 : 8}" class="empty-state">No published results yet.</td></tr>`}
                 </tbody>
               </table>
             </div>
           </div>
         `;
+        document.getElementById('appContent').querySelectorAll('[data-res-cert-id]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const cid = btn.getAttribute('data-res-cert-id');
+            const cnum = btn.getAttribute('data-res-cert-num') || 'Certificate';
+            this.downloadWithAuth(`/api/certificates/${cid}/pdf`, `${cnum}.pdf`);
+          });
+        });
+      },
+
+      // ---------------- 7B. CERTIFICATES & VERIFICATION ----------------
+      async runCertificateVerification(certificateNumber, containerId) {
+        const box = document.getElementById(containerId);
+        if (!box) return;
+        const cleanCode = String(certificateNumber || '').trim().toUpperCase();
+        if (!cleanCode) {
+          box.innerHTML = `<div style="padding:12px;border-radius:8px;background:#FDECEA;color:var(--red);font-size:13px;">Enter a Certificate Number to verify.</div>`;
+          return;
+        }
+        box.innerHTML = `<div style="padding:12px;font-size:13px;color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Verifying ${this.esc(cleanCode)}...</div>`;
+        try {
+          const res = await fetch(`/api/certificates/verify/${encodeURIComponent(cleanCode)}`, {
+            headers: { Accept: 'application/json' },
+          });
+          const data = await res.json();
+          if (!res.ok || !data.certificate) {
+            box.innerHTML = `
+              <div style="padding:14px;border-radius:8px;background:#FDECEA;border:1px solid #F5C2C0;color:#B42318;font-size:13px;">
+                <strong><i class="fa-solid fa-circle-xmark"></i> Not Verified:</strong> ${this.esc((data && data.message) || 'Certificate not found.')}
+              </div>`;
+            return;
+          }
+          const c = data.certificate;
+          box.innerHTML = `
+            <div style="padding:14px 16px;border-radius:10px;background:#ECFDF5;border:1px solid #A7F3D0;font-size:13px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+                <strong style="color:#047857;font-size:14px;"><i class="fa-solid fa-circle-check"></i> Authentic Certificate Verified</strong>
+                <span class="badge badge-green">${this.esc(c.certificateNumber)}</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
+                <div><small style="color:var(--text-muted);">Student Name</small><div><strong>${this.esc(c.studentName)}</strong></div></div>
+                <div><small style="color:var(--text-muted);">Student ID / Batch</small><div>${this.esc(c.studentIdCode || '—')} &bull; <span class="badge badge-teal">${this.esc(c.batchNumber)}</span></div></div>
+                <div><small style="color:var(--text-muted);">Department</small><div>${this.esc(c.department || '—')}</div></div>
+                <div><small style="color:var(--text-muted);">Course</small><div><strong>${this.esc(c.courseName)}</strong></div></div>
+                <div><small style="color:var(--text-muted);">Examination</small><div>${this.esc(c.examTitle)} (${this.esc(c.examCode)})</div></div>
+                <div><small style="color:var(--text-muted);">Score &amp; Grade</small><div><strong>${c.obtainedMarks}/${c.totalMarks} (${c.percentage}%)</strong> &bull; <span class="badge badge-blue">Grade ${this.esc(c.grade)}</span></div></div>
+                <div><small style="color:var(--text-muted);">Status &amp; Issued</small><div>${c.passed ? '<span class="badge badge-green">PASSED</span>' : '<span class="badge badge-orange">COMPLETED</span>'} &bull; ${this.fmtDate(c.issuedAt)}</div></div>
+              </div>
+            </div>
+          `;
+        } catch (err) {
+          box.innerHTML = `<div style="padding:12px;border-radius:8px;background:#FDECEA;color:var(--red);font-size:13px;">${this.esc(err.message)}</div>`;
+        }
+      },
+
+      async loadCertificates(search = '') {
+        const isAdmin = this.user.role === 'admin';
+        this.setPageMeta(
+          'Academics',
+          isAdmin ? 'Student Certificates' : 'My Certificates & Verification'
+        );
+        const q = new URLSearchParams();
+        if (search) q.set('search', search);
+        const data = await this.api(`/api/certificates${q.toString() ? `?${q.toString()}` : ''}`);
+        const certs = data.certificates || [];
+
+        document.getElementById('appContent').innerHTML = `
+          <div class="card" style="margin-bottom:18px;">
+            <div class="card-header">
+              <div class="card-title"><i class="fa-solid fa-shield-check" style="color:var(--green);"></i> Certificate Verification Portal</div>
+            </div>
+            <form id="portalVerifyCertForm" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+              <input id="portalVerifyCertInput" type="text" class="form-control" style="max-width:340px;text-transform:uppercase;" placeholder="Enter Certificate Number (e.g. CERT-2026-...)" required />
+              <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-magnifying-glass"></i> Verify Certificate</button>
+            </form>
+            <div id="portalVerifyCertResult" style="margin-top:12px;"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header" style="flex-wrap:wrap;gap:10px;">
+              <div class="card-title"><i class="fa-solid fa-certificate" style="color:var(--orange);"></i> Issued Certificates (${certs.length})</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <input id="certSearchInput" type="text" class="form-control" style="max-width:240px;" placeholder="Search cert no, course, student..." value="${this.esc(search)}" />
+                <button type="button" class="btn btn-primary btn-sm" id="certSearchBtn"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Certificate No.</th>
+                    ${isAdmin ? '<th>Student</th>' : ''}
+                    <th>Batch</th><th>Course &amp; Exam</th><th>Score</th><th>Grade</th><th>Issued Date</th><th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${certs.length ? certs.map((c) => `
+                    <tr>
+                      <td><strong><code>${this.esc(c.certificateNumber)}</code></strong></td>
+                      ${isAdmin ? `<td><strong>${this.esc(c.studentName)}</strong><br><small style="color:var(--text-muted);">${this.esc(c.studentIdCode || '')}</small></td>` : ''}
+                      <td><span class="badge badge-teal">${this.esc(c.batchNumber || 'BATCH-01')}</span></td>
+                      <td>
+                        <div style="font-weight:600;">${this.esc(c.courseName)}</div>
+                        <small style="color:var(--text-muted);">${this.esc(c.examCode)} — ${this.esc(c.examTitle)}</small>
+                      </td>
+                      <td>${c.obtainedMarks} / ${c.totalMarks} (${c.percentage}%)</td>
+                      <td><span class="badge badge-blue">${this.esc(c.grade)}</span></td>
+                      <td>${this.fmtDate(c.issuedAt)}</td>
+                      <td>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                          <button type="button" class="btn btn-success btn-sm" data-pdf-cert="${this.esc(c._id)}" data-pdf-name="${this.esc(c.certificateNumber)}"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+                          <button type="button" class="btn btn-outline btn-sm" data-verify-code="${this.esc(c.certificateNumber)}"><i class="fa-solid fa-shield-check"></i> Verify</button>
+                          <button type="button" class="btn btn-outline btn-sm" data-copy-verify="${this.esc(c.verificationUrl || '')}"><i class="fa-solid fa-link"></i> Copy Link</button>
+                        </div>
+                      </td>
+                    </tr>`).join('') : `<tr><td colspan="${isAdmin ? 8 : 7}" class="empty-state">No certificates issued yet. Certificates generate automatically when an examination is attempted/submitted.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+
+        document.getElementById('portalVerifyCertForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          await this.runCertificateVerification(
+            document.getElementById('portalVerifyCertInput').value,
+            'portalVerifyCertResult'
+          );
+        });
+        document.getElementById('certSearchBtn').addEventListener('click', () => {
+          this.loadCertificates(document.getElementById('certSearchInput').value);
+        });
+        const contentEl = document.getElementById('appContent');
+        contentEl.querySelectorAll('[data-pdf-cert]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const id = btn.getAttribute('data-pdf-cert');
+            const num = btn.getAttribute('data-pdf-name') || 'Certificate';
+            this.downloadWithAuth(`/api/certificates/${id}/pdf`, `${num}.pdf`);
+          });
+        });
+        contentEl.querySelectorAll('[data-verify-code]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const code = btn.getAttribute('data-verify-code');
+            document.getElementById('portalVerifyCertInput').value = code;
+            await this.runCertificateVerification(code, 'portalVerifyCertResult');
+          });
+        });
+        contentEl.querySelectorAll('[data-copy-verify]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const url = btn.getAttribute('data-copy-verify') || '';
+            try {
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(url);
+                this.showToast('Certificate verification link copied!', 'success');
+              } else {
+                this.showToast(url, 'info');
+              }
+            } catch (_err) {
+              this.showToast(url, 'info');
+            }
+          });
+        });
       },
 
       // ---------------- 8. WALLET & TRANSACTIONS ----------------
@@ -4548,13 +4900,16 @@
                 ${isStudent ? `
                   <div class="form-row">
                     <div class="form-group"><label class="form-label">Student ID</label><input class="form-control" value="${this.esc(p.studentId)}" disabled /></div>
-                    <div class="form-group"><label class="form-label">Phone</label><input id="pfPhone" class="form-control" value="${this.esc(p.phone || '')}" /></div>
+                    <div class="form-group"><label class="form-label">Allocated Batch Number</label><input class="form-control" value="${this.esc(p.batchNumber || 'BATCH-01')}" disabled /></div>
                   </div>
                   <div class="form-row">
+                    <div class="form-group"><label class="form-label">Phone</label><input id="pfPhone" class="form-control" value="${this.esc(p.phone || '')}" /></div>
                     <div class="form-group"><label class="form-label">Department</label><input id="pfDept" class="form-control" value="${this.esc(p.department || '')}" /></div>
-                    <div class="form-group"><label class="form-label">Program</label><input id="pfProgram" class="form-control" value="${this.esc(p.program || '')}" /></div>
                   </div>
-                  <div class="form-group"><label class="form-label">Address</label><input id="pfAddress" class="form-control" value="${this.esc(p.address || '')}" /></div>
+                  <div class="form-row">
+                    <div class="form-group"><label class="form-label">Program</label><input id="pfProgram" class="form-control" value="${this.esc(p.program || '')}" /></div>
+                    <div class="form-group"><label class="form-label">Address</label><input id="pfAddress" class="form-control" value="${this.esc(p.address || '')}" /></div>
+                  </div>
                   <div class="form-group"><label class="form-label">Bio</label><textarea id="pfBio" class="form-control">${this.esc(p.bio || '')}</textarea></div>
                 ` : ''}
                 <button type="submit" class="btn btn-primary btn-block">Save Profile Changes</button>

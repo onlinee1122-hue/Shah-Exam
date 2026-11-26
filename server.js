@@ -31,6 +31,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
+const PDFDocument = require('pdfkit');
 
 const MongoStore = connectMongo.MongoStore || connectMongo.default || connectMongo;
 
@@ -379,6 +380,9 @@ const studentProfileSchema = new mongoose.Schema(
     dateOfBirth: { type: Date, default: null },
     gender: { type: String, enum: ['Male', 'Female', 'Non-Binary', 'Prefer not to say', ''], default: '' },
     department: { type: String, trim: true, maxlength: 100, default: 'Computer Science' },
+    course: { type: String, trim: true, maxlength: 120, default: '' },
+    studyOption: { type: String, trim: true, maxlength: 80, default: '' },
+    batchNumber: { type: String, trim: true, uppercase: true, maxlength: 60, default: 'BATCH-01', index: true },
     program: { type: String, trim: true, maxlength: 100, default: 'B.Sc. Honors' },
     semester: { type: String, trim: true, maxlength: 40, default: 'Semester 1' },
     enrollmentDate: { type: Date, default: Date.now },
@@ -578,7 +582,7 @@ const notificationSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     type: {
       type: String,
-      enum: ['exam', 'deadline', 'result', 'message', 'account', 'announcement'],
+      enum: ['exam', 'deadline', 'result', 'certificate', 'message', 'account', 'announcement'],
       default: 'announcement',
     },
     title: { type: String, required: true, trim: true, maxlength: 160 },
@@ -621,6 +625,41 @@ const fileMetaSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const certificateSchema = new mongoose.Schema(
+  {
+    certificateNumber: {
+      type: String,
+      required: true,
+      unique: true,
+      uppercase: true,
+      trim: true,
+      maxlength: 40,
+      index: true,
+    },
+    student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    studentName: { type: String, required: true, trim: true, maxlength: 120 },
+    studentIdCode: { type: String, trim: true, maxlength: 40, default: '' },
+    department: { type: String, trim: true, maxlength: 100, default: '' },
+    batchNumber: { type: String, trim: true, uppercase: true, maxlength: 60, default: 'BATCH-01' },
+    examination: { type: mongoose.Schema.Types.ObjectId, ref: 'Examination', required: true, index: true },
+    examTitle: { type: String, required: true, trim: true, maxlength: 180 },
+    examCode: { type: String, required: true, trim: true, uppercase: true, maxlength: 40 },
+    courseName: { type: String, required: true, trim: true, maxlength: 140 },
+    studyOption: { type: String, trim: true, maxlength: 80, default: '' },
+    submission: { type: mongoose.Schema.Types.ObjectId, ref: 'Submission', required: true, unique: true },
+    obtainedMarks: { type: Number, required: true, min: 0, default: 0 },
+    totalMarks: { type: Number, required: true, min: 1, default: 100 },
+    percentage: { type: Number, required: true, min: 0, max: 100, default: 0 },
+    grade: { type: String, required: true, maxlength: 10, default: 'F' },
+    passed: { type: Boolean, default: false },
+    attemptedQuestionsCount: { type: Number, min: 0, default: 0 },
+    totalQuestionsCount: { type: Number, min: 0, default: 0 },
+    status: { type: String, enum: ['issued', 'revoked'], default: 'issued', index: true },
+    issuedAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
 const User = mongoose.model('User', userSchema);
 const StudentProfile = mongoose.model('StudentProfile', studentProfileSchema);
 const Department = mongoose.model('Department', departmentSchema);
@@ -635,6 +674,7 @@ const Message = mongoose.model('Message', messageSchema);
 const Notification = mongoose.model('Notification', notificationSchema);
 const ActivityLog = mongoose.model('ActivityLog', activityLogSchema);
 const FileMeta = mongoose.model('FileMeta', fileMetaSchema);
+const Certificate = mongoose.model('Certificate', certificateSchema);
 
 // ============================================================================
 // 5. EXPRESS MIDDLEWARE, SECURITY, SESSION & CSRF
@@ -1496,6 +1536,355 @@ function registerRoutes() {
     }
   });
 
+  function normalizeBatchNumber(raw) {
+    return cleanString(String(raw || ''), 60)
+      .toUpperCase()
+      .replace(/[^A-Z0-9._-]/g, '-');
+  }
+
+  async function resolveAllocatedBatch(rawBatch, fallbackBatch = 'BATCH-01') {
+    const cleaned = normalizeBatchNumber(rawBatch);
+    if (cleaned.length >= 2) return cleaned;
+    const firstActive = await Batch.findOne({ status: 'active' }).sort({ batchNumber: 1 }).select('batchNumber').lean();
+    return (firstActive && firstActive.batchNumber) || fallbackBatch;
+  }
+
+  async function getQuestionsForStudentExam(exam, studentUserId, { includeAnswerKey = false } = {}) {
+    const profile = await StudentProfile.findOne({ user: studentUserId }).select('batchNumber').lean();
+    const studentBatch = normalizeBatchNumber((profile && profile.batchNumber) || 'BATCH-01') || 'BATCH-01';
+    const qQuery = Question.find({ examination: exam._id }).sort({ order: 1, createdAt: 1 });
+    if (!includeAnswerKey) {
+      qQuery.select('-correctAnswer');
+    }
+    const allQuestions = await qQuery.lean();
+
+    const batchQuestions = allQuestions.filter(
+      (q) => (normalizeBatchNumber(q.batchNumber || 'BATCH-01') || 'BATCH-01') === studentBatch
+    );
+
+    const examBatch = normalizeBatchNumber(exam.batchNumber || '');
+    if (batchQuestions.length > 0) {
+      return { studentBatch, questions: batchQuestions, eligible: true, batchMatched: true };
+    }
+    if (examBatch && examBatch !== studentBatch) {
+      return { studentBatch, questions: [], eligible: false, batchMatched: false };
+    }
+    if (allQuestions.length > 0) {
+      return { studentBatch, questions: [], eligible: false, batchMatched: false };
+    }
+    return { studentBatch, questions: [], eligible: true, batchMatched: true };
+  }
+
+  function computeEffectiveExamScale(exam, questions) {
+    const qSum = (questions || []).reduce((acc, q) => acc + (Number(q.marks) || 0), 0);
+    const totalMarks = qSum > 0 ? qSum : Math.max(1, Number(exam.totalMarks) || 100);
+    let passingMarks = Math.max(0, Number(exam.passingMarks) || 0);
+    if (qSum > 0 && exam.totalMarks > 0 && qSum !== exam.totalMarks) {
+      passingMarks = Math.min(totalMarks, Math.round((passingMarks / exam.totalMarks) * totalMarks));
+    }
+    return { totalMarks, passingMarks };
+  }
+
+  function generateCertificateNumber() {
+    const yr = new Date().getFullYear();
+    const suffix = crypto.randomBytes(4).toString('hex').toUpperCase();
+    return `CERT-${yr}-${suffix}`;
+  }
+
+  async function upsertCertificateForSubmission({ submission, exam, studentUser, questions = null, resultDoc = null }) {
+    if (!submission || !exam || !studentUser) return null;
+    const studentObjId = studentUser._id || studentUser;
+    const [userDoc, profile, resolvedQuestions] = await Promise.all([
+      studentUser.name ? Promise.resolve(studentUser) : User.findById(studentObjId).select('name email').lean(),
+      StudentProfile.findOne({ user: studentObjId }).lean(),
+      questions
+        ? Promise.resolve(questions)
+        : getQuestionsForStudentExam(exam, studentObjId, { includeAnswerKey: false }).then((r) => r.questions),
+    ]);
+
+    if (!userDoc) return null;
+
+    const { totalMarks: computedTotalMarks, passingMarks: computedPassingMarks } = computeEffectiveExamScale(
+      exam,
+      resolvedQuestions
+    );
+    const totalMarks = Math.max(1, resultDoc ? resultDoc.totalMarks : computedTotalMarks);
+    const obtainedMarks = Math.min(
+      totalMarks,
+      Math.max(0, Number(resultDoc ? resultDoc.obtainedMarks : submission.totalScore) || 0)
+    );
+    const percentage = Math.min(
+      100,
+      Math.max(0, resultDoc ? resultDoc.percentage : Math.round((obtainedMarks / totalMarks) * 100))
+    );
+    const grade = resultDoc ? resultDoc.grade : formatGrade(percentage);
+    const passed = resultDoc ? Boolean(resultDoc.passed) : obtainedMarks >= computedPassingMarks;
+
+    const attemptedQuestionsCount = (submission.answers || []).filter(
+      (a) => (a.selectedOption && a.selectedOption.trim()) || (a.answerText && a.answerText.trim())
+    ).length;
+
+    const studentBatch = normalizeBatchNumber((profile && profile.batchNumber) || 'BATCH-01') || 'BATCH-01';
+    const existing = await Certificate.findOne({ submission: submission._id });
+
+    const fields = {
+      student: studentObjId,
+      studentName: userDoc.name,
+      studentIdCode: (profile && profile.studentId) || '',
+      department: (profile && profile.department) || exam.department || 'General Studies',
+      batchNumber: studentBatch,
+      examination: exam._id,
+      examTitle: exam.title,
+      examCode: exam.code,
+      courseName: exam.course || (profile && profile.course) || 'Academic Assessment',
+      studyOption: exam.studyOption || (profile && profile.studyOption) || '',
+      submission: submission._id,
+      obtainedMarks,
+      totalMarks,
+      percentage,
+      grade,
+      passed,
+      attemptedQuestionsCount,
+      totalQuestionsCount: resolvedQuestions.length || (submission.answers || []).length,
+    };
+
+    if (existing) {
+      Object.assign(existing, fields);
+      await existing.save();
+      return { certificate: existing.toObject(), created: false };
+    }
+
+    const certificate = await Certificate.create({
+      ...fields,
+      certificateNumber: generateCertificateNumber(),
+      status: 'issued',
+      issuedAt: submission.submittedAt || new Date(),
+    });
+
+    await Notification.create({
+      user: studentObjId,
+      type: 'certificate',
+      title: `Certificate Generated: ${certificate.certificateNumber}`,
+      message: `Your certificate for ${exam.course || exam.title} (${certificate.grade} — ${certificate.percentage}%) is ready to download.`,
+      linkView: 'certificates',
+    });
+
+    return { certificate: certificate.toObject(), created: true };
+  }
+
+  async function ensureCertificatesBackfilled(userFilter = {}) {
+    const subFilter = { status: { $in: ['submitted', 'evaluated'] }, ...userFilter };
+    const subs = await Submission.find(subFilter).lean();
+    if (!subs.length) return;
+    const subIds = subs.map((s) => s._id);
+    const existingCerts = await Certificate.find({ submission: { $in: subIds } }).select('submission').lean();
+    const existingSet = new Set(existingCerts.map((c) => String(c.submission)));
+    const missingSubs = subs.filter((s) => !existingSet.has(String(s._id)));
+    if (!missingSubs.length) return;
+
+    const examIds = Array.from(new Set(missingSubs.map((s) => String(s.examination))));
+    const stuIds = Array.from(new Set(missingSubs.map((s) => String(s.student))));
+    const [exams, students, results] = await Promise.all([
+      Examination.find({ _id: { $in: examIds } }).lean(),
+      User.find({ _id: { $in: stuIds } }).select('name email').lean(),
+      Result.find({ submission: { $in: missingSubs.map((s) => s._id) } }).lean(),
+    ]);
+    const examMap = new Map(exams.map((e) => [String(e._id), e]));
+    const stuMap = new Map(students.map((u) => [String(u._id), u]));
+    const resMap = new Map(results.map((r) => [String(r.submission), r]));
+
+    for (const sub of missingSubs) {
+      const exam = examMap.get(String(sub.examination));
+      const studentUser = stuMap.get(String(sub.student));
+      if (!exam || !studentUser) continue;
+      await upsertCertificateForSubmission({
+        submission: sub,
+        exam,
+        studentUser,
+        resultDoc: resMap.get(String(sub._id)) || null,
+      });
+    }
+  }
+
+  function buildCertificatePdfBuffer(cert, verificationUrl) {
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({
+        size: 'A4',
+        layout: 'landscape',
+        margins: { top: 36, bottom: 36, left: 42, right: 42 },
+      });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+
+      // Clean ivory background + double academic border
+      doc.rect(0, 0, pageW, pageH).fill('#FCFDFE');
+      doc.lineWidth(4).strokeColor('#0F5298').rect(22, 22, pageW - 44, pageH - 44).stroke();
+      doc.lineWidth(1.5).strokeColor('#F39C12').rect(32, 32, pageW - 64, pageH - 64).stroke();
+
+      // Top navy header ribbon
+      doc.rect(32, 32, pageW - 64, 72).fill('#0F5298');
+      doc
+        .fillColor('#FFFFFF')
+        .font('Helvetica-Bold')
+        .fontSize(22)
+        .text('EDUPULSE UNIVERSITY PORTAL', 54, 48, { width: pageW - 108, align: 'center' });
+      doc
+        .fillColor('#D6E8FA')
+        .font('Helvetica')
+        .fontSize(10.5)
+        .text('OFFICIAL CERTIFICATE OF EXAMINATION & ACADEMIC ACHIEVEMENT', 54, 78, {
+          width: pageW - 108,
+          align: 'center',
+        });
+
+      // Certificate ID & Issue Date row
+      const issuedDateStr = new Date(cert.issuedAt || cert.createdAt || Date.now()).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      doc.fillColor('#4F647A').font('Helvetica-Bold').fontSize(10);
+      doc.text(`Certificate No: ${cert.certificateNumber}`, 54, 122, { width: 320, align: 'left' });
+      doc.text(`Issued On: ${issuedDateStr}`, pageW - 374, 122, { width: 320, align: 'right' });
+
+      // Certification Body
+      doc
+        .fillColor('#5F738A')
+        .font('Helvetica')
+        .fontSize(13)
+        .text('THIS IS TO PROUDLY CERTIFY THAT', 54, 156, { width: pageW - 108, align: 'center' });
+
+      doc
+        .fillColor('#0B3C70')
+        .font('Times-Bold')
+        .fontSize(32)
+        .text(cert.studentName || 'Student', 54, 182, { width: pageW - 108, align: 'center' });
+
+      const metaLine = [
+        cert.studentIdCode ? `Student ID: ${cert.studentIdCode}` : null,
+        cert.department ? `Department: ${cert.department}` : null,
+        cert.batchNumber ? `Allocated Batch: ${cert.batchNumber}` : null,
+      ]
+        .filter(Boolean)
+        .join('   •   ');
+      doc
+        .fillColor('#334155')
+        .font('Helvetica')
+        .fontSize(11)
+        .text(metaLine, 54, 224, { width: pageW - 108, align: 'center' });
+
+      // Divider
+      doc
+        .moveTo(160, 250)
+        .lineTo(pageW - 160, 250)
+        .lineWidth(1)
+        .strokeColor('#CBD5E1')
+        .stroke();
+
+      doc
+        .fillColor('#475569')
+        .font('Helvetica')
+        .fontSize(12)
+        .text('has successfully appeared in the examination requirements for the course', 54, 266, {
+          width: pageW - 108,
+          align: 'center',
+        });
+
+      doc
+        .fillColor('#0F5298')
+        .font('Helvetica-Bold')
+        .fontSize(20)
+        .text(cert.courseName || cert.examTitle, 54, 290, { width: pageW - 108, align: 'center' });
+
+      const examSubtitle = `Examination: ${cert.examTitle} (${cert.examCode})${cert.studyOption ? `   •   Study Option: ${cert.studyOption}` : ''}`;
+      doc
+        .fillColor('#4F647A')
+        .font('Helvetica')
+        .fontSize(11)
+        .text(examSubtitle, 54, 320, { width: pageW - 108, align: 'center' });
+
+      // Score / Grade / Status Cards
+      const cardY = 352;
+      const cardW = 190;
+      const gap = 26;
+      const startX = (pageW - (cardW * 3 + gap * 2)) / 2;
+
+      const metricCards = [
+        { label: 'ASSESSMENT SCORE', value: `${cert.obtainedMarks} / ${cert.totalMarks} (${cert.percentage}%)`, accent: '#0F5298' },
+        { label: 'AWARDED GRADE', value: `${cert.grade}`, accent: '#27AE60' },
+        {
+          label: 'CERTIFICATION STATUS',
+          value: cert.status === 'revoked' ? 'REVOKED' : cert.passed ? 'PASSED' : 'COMPLETED',
+          accent: cert.status === 'revoked' ? '#D93025' : cert.passed ? '#33B89E' : '#F39C12',
+        },
+      ];
+
+      metricCards.forEach((mc, idx) => {
+        const cx = startX + idx * (cardW + gap);
+        doc.roundedRect(cx, cardY, cardW, 66, 6).fillAndStroke('#F4F8FC', '#D6E2EE');
+        doc.rect(cx, cardY, cardW, 5).fill(mc.accent);
+        doc
+          .fillColor('#64748B')
+          .font('Helvetica-Bold')
+          .fontSize(9)
+          .text(mc.label, cx + 10, cardY + 14, { width: cardW - 20, align: 'center' });
+        doc
+          .fillColor('#0F172A')
+          .font('Helvetica-Bold')
+          .fontSize(15)
+          .text(mc.value, cx + 10, cardY + 33, { width: cardW - 20, align: 'center' });
+      });
+
+      // Bottom Signature & Verification Link
+      const footerY = 446;
+      doc
+        .moveTo(64, footerY + 26)
+        .lineTo(260, footerY + 26)
+        .lineWidth(1)
+        .strokeColor('#64748B')
+        .stroke();
+      doc
+        .fillColor('#0F5298')
+        .font('Helvetica-Bold')
+        .fontSize(11)
+        .text('Office of Academic Affairs', 64, footerY + 32, { width: 196, align: 'center' });
+      doc
+        .fillColor('#64748B')
+        .font('Helvetica')
+        .fontSize(9.5)
+        .text('EduPulse Portal Registrar', 64, footerY + 47, { width: 196, align: 'center' });
+
+      // Verification Box
+      doc.roundedRect(310, footerY, pageW - 364, 72, 6).fillAndStroke('#EEF6FC', '#BBD6F2');
+      doc
+        .fillColor('#0F5298')
+        .font('Helvetica-Bold')
+        .fontSize(10)
+        .text(`CERTIFICATE VERIFICATION LINK (Certificate No: ${cert.certificateNumber})`, 324, footerY + 11, {
+          width: pageW - 392,
+        });
+      doc
+        .fillColor('#1E293B')
+        .font('Helvetica')
+        .fontSize(9.5)
+        .text(verificationUrl, 324, footerY + 28, { width: pageW - 392 });
+      doc
+        .fillColor('#475569')
+        .font('Helvetica')
+        .fontSize(8.5)
+        .text('Open this link or enter the Certificate Number on the EduPulse Verify Certificate page to confirm authenticity.', 324, footerY + 47, {
+          width: pageW - 392,
+        });
+
+      doc.end();
+    });
+  }
+
   app.post('/api/auth/register', authLimiter, async (req, res, next) => {
     try {
       const name = cleanString(req.body.name, 100);
@@ -1504,6 +1893,9 @@ function registerRoutes() {
       const password = typeof req.body.password === 'string' ? req.body.password : '';
       const confirmPassword = typeof req.body.confirmPassword === 'string' ? req.body.confirmPassword : '';
       const department = cleanString(req.body.department || 'Computer Science', 100);
+      const course = cleanString(req.body.course || '', 120);
+      const studyOption = cleanString(req.body.studyOption || '', 80);
+      const batchNumber = await resolveAllocatedBatch(req.body.batchNumber, 'BATCH-01');
       const phone = cleanString(req.body.phone || '', 30);
 
       if (name.length < 2) {
@@ -1544,6 +1936,9 @@ function registerRoutes() {
         studentId,
         phone,
         department,
+        course,
+        studyOption,
+        batchNumber,
         program: 'B.Sc. Honors',
         semester: 'Semester 1',
         enrollmentDate: new Date(),
@@ -1576,16 +1971,16 @@ function registerRoutes() {
         user: user._id,
         type: 'account',
         title: 'Registration Confirmed',
-        message: `Welcome ${name}! Your Student ID is ${studentId}.`,
+        message: `Welcome ${name}! Your Student ID is ${studentId} and your allocated batch is ${batchNumber}.`,
         linkView: 'profile',
       });
 
       const { csrfToken, sessionToken } = await regenerateAndSaveSession(req, user._id, false);
-      await recordActivity(req, 'STUDENT_REGISTERED', 'User', user._id, `Registered ${studentId} (${email})`, user);
+      await recordActivity(req, 'STUDENT_REGISTERED', 'User', user._id, `Registered ${studentId} (${email}) in ${batchNumber}`, user);
 
       return res.status(201).json({
         success: true,
-        message: 'Registration successful! Welcome to EduPulse Portal.',
+        message: `Registration successful! Allocated Batch: ${batchNumber}.`,
         csrfToken,
         sessionToken,
         user: {
@@ -1594,6 +1989,7 @@ function registerRoutes() {
           email: user.email,
           role: user.role,
           studentId,
+          batchNumber,
         },
       });
     } catch (err) {
@@ -1947,6 +2343,7 @@ function registerRoutes() {
           status: user.status,
           avatarBase64: (profile && profile.avatarBase64) || user.avatarBase64 || '',
           studentId: profile ? profile.studentId : 'ADMIN-001',
+          batchNumber: profile ? profile.batchNumber || 'BATCH-01' : '',
           profile,
           unreadMessages,
           unreadNotifications,
@@ -2029,6 +2426,26 @@ function registerRoutes() {
         ActivityLog.find({ actor: uid }).sort({ createdAt: -1 }).limit(8).lean(),
       ]);
 
+      const studentBatch = normalizeBatchNumber((profile && profile.batchNumber) || 'BATCH-01') || 'BATCH-01';
+      const examIds = exams.map((e) => e._id);
+      const [examQs, certCount] = await Promise.all([
+        Question.find({ examination: { $in: examIds } }).select('examination batchNumber').lean(),
+        Certificate.countDocuments({ student: uid, status: 'issued' }),
+      ]);
+      const eligibleExams = exams.filter((e) => {
+        const hasSub = submissions.some((s) => String(s.examination) === String(e._id));
+        if (hasSub) return true;
+        const qsForExam = examQs.filter((q) => String(q.examination) === String(e._id));
+        const hasBatchQ = qsForExam.some(
+          (q) => (normalizeBatchNumber(q.batchNumber || 'BATCH-01') || 'BATCH-01') === studentBatch
+        );
+        if (hasBatchQ) return true;
+        const examBatch = normalizeBatchNumber(e.batchNumber || '');
+        if (examBatch && examBatch !== studentBatch) return false;
+        if (qsForExam.length > 0) return false;
+        return true;
+      });
+
       const completedSubs = submissions.filter((s) => s.status !== 'in_progress').length;
       const avgScore = results.length
         ? Math.round(results.reduce((acc, r) => acc + r.percentage, 0) / results.length)
@@ -2043,13 +2460,14 @@ function registerRoutes() {
           currency: wallet ? wallet.currency : 'USD',
           unreadMessages,
           totalInbox,
-          availableExams: exams.length,
+          availableExams: eligibleExams.length,
           completedExams: completedSubs,
           publishedResults: results.length,
+          certificatesCount: certCount,
           averagePercentage: avgScore,
           passedCount,
         },
-        upcomingExams: exams,
+        upcomingExams: eligibleExams,
         recentResults: results,
         notifications,
         activities,
@@ -2229,6 +2647,7 @@ function registerRoutes() {
           createdAt: u.createdAt,
           studentId: p.studentId || '',
           department: p.department || '',
+          batchNumber: p.batchNumber || 'BATCH-01',
           program: p.program || '',
           semester: p.semester || '',
           phone: p.phone || '',
@@ -2258,6 +2677,7 @@ function registerRoutes() {
       const email = cleanString(req.body.email, 160).toLowerCase();
       const password = typeof req.body.password === 'string' ? req.body.password : '';
       const department = cleanString(req.body.department || 'Computer Science', 100);
+      const batchNumber = await resolveAllocatedBatch(req.body.batchNumber, 'BATCH-01');
       const program = cleanString(req.body.program || 'B.Sc. Honors', 100);
       const semester = cleanString(req.body.semester || 'Semester 1', 40);
       const phone = cleanString(req.body.phone || '', 30);
@@ -2293,12 +2713,26 @@ function registerRoutes() {
         user: user._id,
         studentId,
         department,
+        batchNumber,
         program,
         semester,
         phone,
         enrollmentDate: new Date(),
         status: 'active',
       });
+
+      await Batch.updateOne(
+        { batchNumber },
+        {
+          $setOnInsert: {
+            batchNumber,
+            department,
+            status: 'active',
+            createdBy: req.currentUser._id,
+          },
+        },
+        { upsert: true }
+      );
 
       const wallet = await Wallet.create({ user: user._id, balance: initialBalance, currency: 'USD' });
       if (initialBalance > 0) {
@@ -2317,11 +2751,11 @@ function registerRoutes() {
         });
       }
 
-      await recordActivity(req, 'ADMIN_CREATED_STUDENT', 'User', user._id, `Created student ${studentId}`);
+      await recordActivity(req, 'ADMIN_CREATED_STUDENT', 'User', user._id, `Created student ${studentId} (${batchNumber})`);
       return res.status(201).json({
         success: true,
-        message: `Student ${name} (${studentId}) registered.`,
-        student: { id: user._id, name: user.name, email: user.email, studentId: profile.studentId },
+        message: `Student ${name} (${studentId}) registered in ${batchNumber}.`,
+        student: { id: user._id, name: user.name, email: user.email, studentId: profile.studentId, batchNumber },
       });
     } catch (err) {
       return next(err);
@@ -2379,6 +2813,21 @@ function registerRoutes() {
         address: cleanString(req.body.address, 250),
         status: status === 'active' ? 'active' : 'inactive',
       };
+      if (typeof req.body.batchNumber === 'string' && normalizeBatchNumber(req.body.batchNumber).length >= 2) {
+        profileUpdates.batchNumber = normalizeBatchNumber(req.body.batchNumber);
+        await Batch.updateOne(
+          { batchNumber: profileUpdates.batchNumber },
+          {
+            $setOnInsert: {
+              batchNumber: profileUpdates.batchNumber,
+              department: profileUpdates.department || '',
+              status: 'active',
+              createdBy: req.currentUser._id,
+            },
+          },
+          { upsert: true }
+        );
+      }
       await StudentProfile.updateOne({ user: user._id }, { $set: profileUpdates });
 
       await recordActivity(req, 'ADMIN_UPDATED_STUDENT', 'User', user._id, `Updated student ${user.email} (${status})`);
@@ -2501,11 +2950,11 @@ function registerRoutes() {
 
   app.get('/api/departments/public', async (_req, res, next) => {
     try {
-      const departments = await Department.find({ status: 'active' })
-        .select('name code courses')
-        .sort({ name: 1 })
-        .lean();
-      return res.json({ success: true, departments });
+      const [departments, batches] = await Promise.all([
+        Department.find({ status: 'active' }).select('name code courses').sort({ name: 1 }).lean(),
+        Batch.find({ status: 'active' }).select('batchNumber department course studyOption description').sort({ batchNumber: 1 }).lean(),
+      ]);
+      return res.json({ success: true, departments, batches });
     } catch (err) {
       return next(err);
     }
@@ -2729,12 +3178,6 @@ function registerRoutes() {
 
   // ---------------- BATCH NUMBERS MANAGEMENT ----------------
 
-  function normalizeBatchNumber(raw) {
-    return cleanString(raw || '', 60)
-      .toUpperCase()
-      .replace(/[^A-Z0-9._-]/g, '-');
-  }
-
   app.get('/api/batches', requireAuth, async (req, res, next) => {
     try {
       const filter = req.currentUser.role === 'admin' ? {} : { status: 'active' };
@@ -2856,37 +3299,78 @@ function registerRoutes() {
       const exams = await Examination.find(filter).sort({ examDate: 1 }).lean();
       const examIds = exams.map((e) => e._id);
 
-      const questionCounts = await Question.aggregate([
-        { $match: { examination: { $in: examIds } } },
-        { $group: { _id: '$examination', count: { $sum: 1 }, totalMarks: { $sum: '$marks' } } },
+      const [questionCounts, allExamQuestions] = await Promise.all([
+        Question.aggregate([
+          { $match: { examination: { $in: examIds } } },
+          { $group: { _id: '$examination', count: { $sum: 1 }, totalMarks: { $sum: '$marks' } } },
+        ]),
+        !isAdmin ? Question.find({ examination: { $in: examIds } }).select('examination batchNumber marks').lean() : Promise.resolve([]),
       ]);
       const qMap = new Map(questionCounts.map((q) => [String(q._id), q]));
 
       let subMap = new Map();
       let resMap = new Map();
+      let certMap = new Map();
+      let studentBatch = '';
       if (!isAdmin) {
-        const [subs, results] = await Promise.all([
+        const [profile, subs, results, certs] = await Promise.all([
+          StudentProfile.findOne({ user: req.currentUser._id }).select('batchNumber').lean(),
           Submission.find({ student: req.currentUser._id, examination: { $in: examIds } }).lean(),
           Result.find({ student: req.currentUser._id, examination: { $in: examIds }, published: true }).lean(),
+          Certificate.find({ student: req.currentUser._id, examination: { $in: examIds }, status: 'issued' }).lean(),
         ]);
+        studentBatch = normalizeBatchNumber((profile && profile.batchNumber) || 'BATCH-01') || 'BATCH-01';
         subMap = new Map(subs.map((s) => [String(s.examination), s]));
         resMap = new Map(results.map((r) => [String(r.examination), r]));
+        certMap = new Map(certs.map((c) => [String(c.examination), c]));
       }
 
-      const payload = exams.map((e) => {
+      let payload = exams.map((e) => {
         const qInfo = qMap.get(String(e._id)) || { count: 0, totalMarks: 0 };
         const sub = subMap.get(String(e._id));
         const r = resMap.get(String(e._id));
+        const c = certMap.get(String(e._id));
+
+        let visibleQuestionCount = qInfo.count;
+        let visibleTotalMarks = qInfo.totalMarks;
+        let eligibleForBatch = true;
+
+        if (!isAdmin) {
+          const examQs = allExamQuestions.filter((q) => String(q.examination) === String(e._id));
+          const myBatchQs = examQs.filter(
+            (q) => (normalizeBatchNumber(q.batchNumber || 'BATCH-01') || 'BATCH-01') === studentBatch
+          );
+          const examBatch = normalizeBatchNumber(e.batchNumber || '');
+          if (myBatchQs.length > 0) {
+            visibleQuestionCount = myBatchQs.length;
+            visibleTotalMarks = myBatchQs.reduce((sum, q) => sum + (Number(q.marks) || 0), 0);
+            eligibleForBatch = true;
+          } else if (examBatch && examBatch !== studentBatch) {
+            visibleQuestionCount = 0;
+            eligibleForBatch = Boolean(sub);
+          } else if (examQs.length > 0) {
+            visibleQuestionCount = 0;
+            eligibleForBatch = Boolean(sub);
+          }
+        }
+
         return {
           ...e,
-          questionCount: qInfo.count,
-          configuredMarks: qInfo.totalMarks,
+          questionCount: visibleQuestionCount,
+          configuredMarks: visibleTotalMarks,
+          studentBatch: !isAdmin ? studentBatch : undefined,
+          eligibleForBatch,
           mySubmission: sub ? { id: sub._id, status: sub.status, startedAt: sub.startedAt, submittedAt: sub.submittedAt } : null,
           myResult: r ? { id: r._id, obtainedMarks: r.obtainedMarks, percentage: r.percentage, grade: r.grade, passed: r.passed } : null,
+          myCertificate: c ? { id: c._id, certificateNumber: c.certificateNumber, grade: c.grade, percentage: c.percentage } : null,
         };
       });
 
-      return res.json({ success: true, examinations: payload });
+      if (!isAdmin) {
+        payload = payload.filter((e) => e.eligibleForBatch);
+      }
+
+      return res.json({ success: true, examinations: payload, studentBatch: !isAdmin ? studentBatch : undefined });
     } catch (err) {
       return next(err);
     }
@@ -3144,23 +3628,36 @@ function registerRoutes() {
         }
       }
 
-      const filter = { examination: exam._id };
-      if (isAdmin) {
-        const courseFilter = cleanString(req.query.course || '', 120);
-        const batchFilter = cleanString(req.query.batchNumber || '', 60).toUpperCase();
-        if (courseFilter) filter.course = courseFilter;
-        if (batchFilter) filter.batchNumber = batchFilter;
+      if (!isAdmin) {
+        const scoped = await getQuestionsForStudentExam(exam, req.currentUser._id, { includeAnswerKey: false });
+        if (!scoped.eligible) {
+          return res.status(403).json({
+            success: false,
+            message: `This examination has no questions allocated to your batch (${scoped.studentBatch}).`,
+          });
+        }
+        return res.json({
+          success: true,
+          examination: exam,
+          studentBatch: scoped.studentBatch,
+          questions: scoped.questions,
+          batches: [scoped.studentBatch],
+          courses: [exam.course].filter(Boolean),
+        });
       }
 
+      const filter = { examination: exam._id };
+      const courseFilter = cleanString(req.query.course || '', 120);
+      const batchFilter = cleanString(req.query.batchNumber || '', 60).toUpperCase();
+      if (courseFilter) filter.course = courseFilter;
+      if (batchFilter) filter.batchNumber = batchFilter;
+
       const query = Question.find(filter).sort({ batchNumber: 1, order: 1, createdAt: 1 });
-      if (!isAdmin) {
-        query.select('-correctAnswer');
-      }
       const [questions, allExamQuestions, allDepts, savedBatches] = await Promise.all([
         query.lean(),
-        isAdmin ? Question.find({ examination: exam._id }).select('batchNumber course').lean() : Promise.resolve([]),
-        isAdmin ? Department.find({}).select('courses').lean() : Promise.resolve([]),
-        isAdmin ? Batch.find({ status: 'active' }).select('batchNumber').lean() : Promise.resolve([]),
+        Question.find({ examination: exam._id }).select('batchNumber course').lean(),
+        Department.find({}).select('courses').lean(),
+        Batch.find({ status: 'active' }).select('batchNumber').lean(),
       ]);
 
       const batches = Array.from(
@@ -3350,6 +3847,14 @@ function registerRoutes() {
         return res.status(403).json({ success: false, message: 'You are not assigned to this examination.' });
       }
 
+      const scoped = await getQuestionsForStudentExam(exam, req.currentUser._id, { includeAnswerKey: false });
+      if (!scoped.eligible) {
+        return res.status(403).json({
+          success: false,
+          message: `This examination is not scheduled for your allocated batch (${scoped.studentBatch}).`,
+        });
+      }
+
       let submission = await Submission.findOne({ examination: exam._id, student: req.currentUser._id });
       if (submission && submission.status !== 'in_progress') {
         return res.status(409).json({
@@ -3367,13 +3872,8 @@ function registerRoutes() {
           answers: [],
           answerFiles: [],
         });
-        await recordActivity(req, 'EXAM_STARTED', 'Examination', exam._id, `Started ${exam.code}`);
+        await recordActivity(req, 'EXAM_STARTED', 'Examination', exam._id, `Started ${exam.code} (${scoped.studentBatch})`);
       }
-
-      const questions = await Question.find({ examination: exam._id })
-        .select('-correctAnswer')
-        .sort({ order: 1, createdAt: 1 })
-        .lean();
 
       const deadlineMs = new Date(submission.startedAt).getTime() + exam.durationMinutes * 60 * 1000;
       const remainingSeconds = Math.max(0, Math.floor((deadlineMs - Date.now()) / 1000));
@@ -3381,8 +3881,9 @@ function registerRoutes() {
       return res.json({
         success: true,
         examination: exam,
+        studentBatch: scoped.studentBatch,
         submission,
-        questions,
+        questions: scoped.questions,
         remainingSeconds,
       });
     } catch (err) {
@@ -3427,10 +3928,9 @@ function registerRoutes() {
         return res.status(400).json({ success: false, message: 'Invalid examination ID.' });
       }
 
-      const [exam, submission, questions] = await Promise.all([
+      const [exam, submission] = await Promise.all([
         Examination.findById(examinationId).lean(),
         Submission.findOne({ examination: examinationId, student: req.currentUser._id }),
-        Question.find({ examination: examinationId }).lean(),
       ]);
 
       if (!exam || !submission) {
@@ -3440,6 +3940,9 @@ function registerRoutes() {
         return res.status(409).json({ success: false, message: 'Examination already submitted.' });
       }
 
+      const scoped = await getQuestionsForStudentExam(exam, req.currentUser._id, { includeAnswerKey: true });
+      const questions = scoped.questions;
+
       // Server-side timer validation (with 2-minute network grace period)
       const maxAllowedMs = (exam.durationMinutes + 2) * 60 * 1000;
       const elapsedMs = Date.now() - new Date(submission.startedAt).getTime();
@@ -3448,7 +3951,6 @@ function registerRoutes() {
         await recordActivity(req, 'EXAM_LATE_SUBMISSION', 'Submission', submission._id, `Submitted after duration (${exam.code})`);
       }
 
-      const questionMap = new Map(questions.map((q) => [String(q._id), q]));
       const incomingAnswers = Array.isArray(req.body.answers) ? req.body.answers : [];
       const answerMap = new Map();
       for (const a of incomingAnswers) {
@@ -3509,6 +4011,14 @@ function registerRoutes() {
       submission.status = hasManualQuestions ? 'submitted' : 'evaluated';
       await submission.save();
 
+      // Auto-generate Certificate as soon as student appears/submits exam
+      const certOutcome = await upsertCertificateForSubmission({
+        submission,
+        exam,
+        studentUser: req.currentUser,
+        questions,
+      });
+
       // Notify admins of new submission
       const admins = await User.find({ role: 'admin', status: 'active' }).select('_id').lean();
       if (admins.length) {
@@ -3517,18 +4027,27 @@ function registerRoutes() {
             user: a._id,
             type: 'exam',
             title: `Submission Received: ${exam.code}`,
-            message: `${req.currentUser.name} submitted ${exam.title}.`,
+            message: `${req.currentUser.name} (${scoped.studentBatch}) submitted ${exam.title}.`,
             linkView: 'submissions',
           }))
         );
       }
 
-      await recordActivity(req, 'EXAM_SUBMITTED', 'Submission', submission._id, `Submitted ${exam.code}`);
+      await recordActivity(
+        req,
+        'EXAM_SUBMITTED',
+        'Submission',
+        submission._id,
+        `Submitted ${exam.code} (${scoped.studentBatch})${certOutcome && certOutcome.certificate ? ` • Certificate ${certOutcome.certificate.certificateNumber}` : ''}`
+      );
 
       return res.status(201).json({
         success: true,
-        message: 'Examination submitted successfully!',
+        message: certOutcome && certOutcome.certificate
+          ? `Examination submitted! Certificate ${certOutcome.certificate.certificateNumber} is ready.`
+          : 'Examination submitted successfully!',
         submission,
+        certificate: certOutcome ? certOutcome.certificate : null,
       });
     } catch (err) {
       return next(err);
@@ -3589,20 +4108,29 @@ function registerRoutes() {
         return res.status(403).json({ success: false, message: 'Access denied.' });
       }
 
-      const result = await Result.findOne({ submission: submission._id }).lean();
+      const [result, certificate] = await Promise.all([
+        Result.findOne({ submission: submission._id }).lean(),
+        Certificate.findOne({ submission: submission._id }).lean(),
+      ]);
       const canSeeAnswerKey = isAdmin || (result && result.published);
 
-      const qQuery = Question.find({ examination: submission.examination._id }).sort({ order: 1 });
-      if (!canSeeAnswerKey) {
-        qQuery.select('-correctAnswer');
+      const scoped = await getQuestionsForStudentExam(submission.examination, submission.student._id, {
+        includeAnswerKey: canSeeAnswerKey,
+      });
+      let questions = scoped.questions;
+      if ((!questions || !questions.length) && submission.answers && submission.answers.length) {
+        const ansQIds = submission.answers.map((a) => a.question).filter(Boolean);
+        const qQuery = Question.find({ _id: { $in: ansQIds } }).sort({ order: 1 });
+        if (!canSeeAnswerKey) qQuery.select('-correctAnswer');
+        questions = await qQuery.lean();
       }
-      const questions = await qQuery.lean();
 
       return res.json({
         success: true,
         submission,
         questions,
         result: canSeeAnswerKey ? result : null,
+        certificate: certificate || null,
       });
     } catch (err) {
       return next(err);
@@ -3619,10 +4147,14 @@ function registerRoutes() {
         return res.status(404).json({ success: false, message: 'Submission not found.' });
       }
 
-      const [exam, questions] = await Promise.all([
-        Examination.findById(submission.examination).lean(),
-        Question.find({ examination: submission.examination }).lean(),
-      ]);
+      const exam = await Examination.findById(submission.examination).lean();
+      if (!exam) {
+        return res.status(404).json({ success: false, message: 'Examination not found.' });
+      }
+      const scoped = await getQuestionsForStudentExam(exam, submission.student, { includeAnswerKey: true });
+      const questions = scoped.questions.length
+        ? scoped.questions
+        : await Question.find({ examination: submission.examination }).lean();
 
       const qMap = new Map(questions.map((q) => [String(q._id), q]));
       const marksInput = Array.isArray(req.body.marks) ? req.body.marks : [];
@@ -3660,7 +4192,11 @@ function registerRoutes() {
         };
       });
 
-      const totalScore = Math.min(exam.totalMarks, autoScore + manualScore);
+      const { totalMarks: effectiveTotalMarks, passingMarks: effectivePassingMarks } = computeEffectiveExamScale(
+        exam,
+        questions
+      );
+      const totalScore = Math.min(effectiveTotalMarks, autoScore + manualScore);
       submission.autoScore = autoScore;
       submission.manualScore = manualScore;
       submission.totalScore = totalScore;
@@ -3671,8 +4207,8 @@ function registerRoutes() {
 
       const publishNow = Boolean(req.body.publish);
       const feedback = cleanString(req.body.feedback || '', 1500);
-      const percentage = Math.min(100, Math.round((totalScore / exam.totalMarks) * 100));
-      const passed = totalScore >= exam.passingMarks;
+      const percentage = Math.min(100, Math.round((totalScore / effectiveTotalMarks) * 100));
+      const passed = totalScore >= effectivePassingMarks;
 
       const result = await Result.findOneAndUpdate(
         { submission: submission._id },
@@ -3680,7 +4216,7 @@ function registerRoutes() {
           $set: {
             examination: exam._id,
             student: submission.student,
-            totalMarks: exam.totalMarks,
+            totalMarks: effectiveTotalMarks,
             obtainedMarks: totalScore,
             percentage,
             grade: formatGrade(percentage),
@@ -3694,12 +4230,20 @@ function registerRoutes() {
         { upsert: true, new: true }
       );
 
+      const certOutcome = await upsertCertificateForSubmission({
+        submission,
+        exam,
+        studentUser: submission.student,
+        questions,
+        resultDoc: result,
+      });
+
       if (publishNow) {
         await Notification.create({
           user: submission.student,
           type: 'result',
           title: `Results Published: ${exam.code}`,
-          message: `You scored ${totalScore}/${exam.totalMarks} (${percentage}% - Grade ${result.grade}).`,
+          message: `You scored ${totalScore}/${effectiveTotalMarks} (${percentage}% - Grade ${result.grade}).`,
           linkView: 'results',
         });
       }
@@ -3709,7 +4253,7 @@ function registerRoutes() {
         'SUBMISSION_EVALUATED',
         'Submission',
         submission._id,
-        `Evaluated ${exam.code}: ${totalScore}/${exam.totalMarks}${publishNow ? ' (Published)' : ''}`
+        `Evaluated ${exam.code}: ${totalScore}/${effectiveTotalMarks}${publishNow ? ' (Published)' : ''}`
       );
 
       return res.json({
@@ -3717,6 +4261,7 @@ function registerRoutes() {
         message: publishNow ? 'Submission evaluated and result published.' : 'Evaluation saved.',
         submission,
         result,
+        certificate: certOutcome ? certOutcome.certificate : null,
       });
     } catch (err) {
       return next(err);
@@ -3735,7 +4280,16 @@ function registerRoutes() {
         .sort({ publishedAt: -1, createdAt: -1 })
         .lean();
 
-      return res.json({ success: true, results });
+      await ensureCertificatesBackfilled(isAdmin ? {} : { student: req.currentUser._id });
+      const subIds = results.map((r) => r.submission).filter(Boolean);
+      const certs = subIds.length ? await Certificate.find({ submission: { $in: subIds } }).lean() : [];
+      const certMap = new Map(certs.map((c) => [String(c.submission), c]));
+      const enriched = results.map((r) => ({
+        ...r,
+        certificate: certMap.get(String(r.submission)) || null,
+      }));
+
+      return res.json({ success: true, results: enriched });
     } catch (err) {
       return next(err);
     }
@@ -3785,6 +4339,13 @@ function registerRoutes() {
         { upsert: true, new: true }
       );
 
+      await upsertCertificateForSubmission({
+        submission,
+        exam,
+        studentUser: submission.student,
+        resultDoc: result,
+      });
+
       if (published) {
         await Notification.create({
           user: submission.student,
@@ -3801,6 +4362,125 @@ function registerRoutes() {
       return next(err);
     }
   });
+
+  // ---------------- CERTIFICATES & PUBLIC VERIFICATION ----------------
+
+  app.get('/api/certificates', requireAuth, async (req, res, next) => {
+    try {
+      const isAdmin = req.currentUser.role === 'admin';
+      await ensureCertificatesBackfilled(isAdmin ? {} : { student: req.currentUser._id });
+
+      const filter = isAdmin ? {} : { student: req.currentUser._id };
+      const batchFilter = cleanString(req.query.batchNumber || '', 60).toUpperCase();
+      const search = cleanString(req.query.search || '', 100);
+      if (isAdmin && batchFilter) {
+        filter.batchNumber = normalizeBatchNumber(batchFilter);
+      }
+      if (search) {
+        const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        filter.$or = [{ certificateNumber: regex }, { studentName: regex }, { courseName: regex }, { examTitle: regex }];
+      }
+
+      const certificates = await Certificate.find(filter).sort({ issuedAt: -1, createdAt: -1 }).lean();
+      const baseUrl = getSafeResetBaseUrl(req);
+      const enriched = certificates.map((c) => ({
+        ...c,
+        verificationUrl: baseUrl
+          ? `${baseUrl}/?verifyCert=${encodeURIComponent(c.certificateNumber)}`
+          : `/?verifyCert=${encodeURIComponent(c.certificateNumber)}`,
+      }));
+
+      return res.json({ success: true, certificates: enriched });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.get('/api/certificates/:id/pdf', requireAuth, async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid certificate identifier.' });
+      }
+      const cert = await Certificate.findById(req.params.id).lean();
+      if (!cert) {
+        return res.status(404).json({ success: false, message: 'Certificate not found.' });
+      }
+
+      const isAdmin = req.currentUser.role === 'admin';
+      if (!isAdmin && String(cert.student) !== String(req.currentUser._id)) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to download this certificate.' });
+      }
+
+      const baseUrl = getSafeResetBaseUrl(req);
+      const verificationUrl = baseUrl
+        ? `${baseUrl}/?verifyCert=${encodeURIComponent(cert.certificateNumber)}`
+        : `/?verifyCert=${encodeURIComponent(cert.certificateNumber)}`;
+
+      const pdfBuffer = await buildCertificatePdfBuffer(cert, verificationUrl);
+      const safeName = sanitizeFilename(`${cert.certificateNumber}_${cert.studentName}_Certificate.pdf`);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.send(pdfBuffer);
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  async function handleCertificateVerification(req, res, next) {
+    try {
+      const rawCode = req.params.certificateNumber || req.query.certificateNumber || req.query.code || '';
+      const certificateNumber = cleanString(String(rawCode), 40)
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]/g, '');
+
+      if (certificateNumber.length < 4) {
+        return res.status(400).json({
+          success: false,
+          valid: false,
+          message: 'Please enter a valid Certificate Number (e.g. CERT-2026-XXXXXXXX).',
+        });
+      }
+
+      await ensureCertificatesBackfilled({});
+      const cert = await Certificate.findOne({ certificateNumber }).lean();
+      if (!cert) {
+        return res.status(404).json({
+          success: false,
+          valid: false,
+          message: `No certificate record found for "${certificateNumber}".`,
+        });
+      }
+
+      return res.json({
+        success: true,
+        valid: cert.status === 'issued',
+        certificate: {
+          certificateNumber: cert.certificateNumber,
+          studentName: cert.studentName,
+          studentIdCode: cert.studentIdCode,
+          department: cert.department,
+          batchNumber: cert.batchNumber,
+          courseName: cert.courseName,
+          studyOption: cert.studyOption,
+          examTitle: cert.examTitle,
+          examCode: cert.examCode,
+          obtainedMarks: cert.obtainedMarks,
+          totalMarks: cert.totalMarks,
+          percentage: cert.percentage,
+          grade: cert.grade,
+          passed: cert.passed,
+          status: cert.status,
+          issuedAt: cert.issuedAt,
+        },
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  app.get('/api/certificates/verify', apiLimiter, handleCertificateVerification);
+  app.get('/api/certificates/verify/:certificateNumber', apiLimiter, handleCertificateVerification);
 
   // ---------------- WALLET & TRANSACTIONS ----------------
 
@@ -4452,6 +5132,7 @@ function registerRoutes() {
           name: u.name,
           email: u.email,
           department: p.department || '',
+          batchNumber: p.batchNumber || 'BATCH-01',
           program: p.program || '',
           semester: p.semester || '',
           status: u.status,
@@ -4461,7 +5142,7 @@ function registerRoutes() {
       });
 
       if (req.query.format === 'csv') {
-        const headers = ['Student ID', 'Name', 'Email', 'Department', 'Program', 'Semester', 'Status', 'Wallet Balance', 'Registered At'];
+        const headers = ['Student ID', 'Name', 'Email', 'Department', 'Batch Number', 'Program', 'Semester', 'Status', 'Wallet Balance', 'Registered At'];
         const csvLines = [
           headers.join(','),
           ...rows.map((r) =>
@@ -4470,6 +5151,7 @@ function registerRoutes() {
               r.name,
               r.email,
               r.department,
+              r.batchNumber,
               r.program,
               r.semester,
               r.status,
