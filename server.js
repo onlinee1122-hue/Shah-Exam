@@ -30,6 +30,7 @@ const bcrypt = require('bcryptjs');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
+const nodemailer = require('nodemailer');
 
 const MongoStore = connectMongo.MongoStore || connectMongo.default || connectMongo;
 
@@ -597,10 +598,15 @@ const FileMeta = mongoose.model('FileMeta', fileMetaSchema);
 // 5. EXPRESS MIDDLEWARE, SECURITY, SESSION & CSRF
 // ============================================================================
 
+const fs = require('fs');
+const viewsDir = fs.existsSync(path.join(__dirname, 'views', 'index.ejs'))
+  ? path.join(__dirname, 'views')
+  : path.join(process.cwd(), 'views');
+
 const app = express();
 app.set('trust proxy', 1);
 app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
+app.set('views', viewsDir);
 
 app.use(
   helmet({
@@ -616,7 +622,14 @@ app.use(
         fontSrc: ["'self'", 'https://fonts.gstatic.com', 'https://cdnjs.cloudflare.com', 'data:'],
         imgSrc: ["'self'", 'data:', 'blob:'],
         connectSrc: ["'self'", 'https://cdn.jsdelivr.net'],
-        frameAncestors: ["'self'", 'https://aistudio.google.com', 'https://*.google.com', 'https://*.googleusercontent.com', 'https://*.usercontent.goog'],
+        frameAncestors: [
+          "'self'",
+          'https://aistudio.google.com',
+          'https://*.google.com',
+          'https://*.googleusercontent.com',
+          'https://*.usercontent.goog',
+          'https://vercel.com',
+        ],
       },
     },
   })
@@ -783,6 +796,7 @@ const PUBLIC_AUTH_CSRF_PATHS = new Set([
   '/auth/login',
   '/auth/register',
   '/auth/forgot-password',
+  '/auth/reset-password',
   '/auth/setup-admin',
 ]);
 
@@ -1589,12 +1603,102 @@ function registerRoutes() {
     }
   });
 
+  function getSafeResetBaseUrl(req) {
+    if (APP_URL && /^https?:\/\//i.test(APP_URL)) {
+      return APP_URL.replace(/\/+$/, '');
+    }
+    const rawHost = ((req.get('x-forwarded-host') || req.get('host') || '').split(',')[0] || '').trim().toLowerCase();
+    const isAllowedHost =
+      /^ais-(dev|pre)-[a-z0-9-]+\.[a-z0-9.-]+$/.test(rawHost) ||
+      /^[a-z0-9-]+\.vercel\.app$/.test(rawHost) ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL && rawHost === process.env.VERCEL_PROJECT_PRODUCTION_URL.toLowerCase()) ||
+      (process.env.VERCEL_URL && rawHost === process.env.VERCEL_URL.toLowerCase()) ||
+      (!IS_PRODUCTION && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(rawHost));
+    if (rawHost && isAllowedHost) {
+      const proto = req.secure || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+      return `${proto}://${rawHost}`;
+    }
+    return '';
+  }
+
+  function isSmtpConfigured() {
+    const user = (process.env.SMTP_USER || '').trim();
+    const pass = (process.env.SMTP_PASS || '').trim();
+    const host = (process.env.SMTP_HOST || '').trim();
+    const service = (process.env.SMTP_SERVICE || '').trim();
+    return Boolean(user && pass && (host || service || user.toLowerCase().endsWith('@gmail.com')));
+  }
+
+  async function sendPasswordResetEmail({ to, name, resetUrl, rawToken }) {
+    const user = (process.env.SMTP_USER || '').trim();
+    let pass = (process.env.SMTP_PASS || '').trim();
+    const host = (process.env.SMTP_HOST || '').trim() || (user.toLowerCase().endsWith('@gmail.com') ? 'smtp.gmail.com' : '');
+    if ((host === 'smtp.gmail.com' || user.toLowerCase().endsWith('@gmail.com')) && /^[a-z]{4}(?:\s+[a-z]{4}){3}$/i.test(pass)) {
+      pass = pass.replace(/\s+/g, '');
+    }
+    const service = (process.env.SMTP_SERVICE || '').trim();
+    const port = Number.parseInt(process.env.SMTP_PORT || '587', 10) || 587;
+    const secure = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true' || port === 465;
+    const from = (process.env.SMTP_FROM || '').trim() || `EduPulse Portal <${user}>`;
+
+    const transportOpts = service
+      ? { service, auth: { user, pass } }
+      : { host, port, secure, auth: { user, pass } };
+
+    const transporter = nodemailer.createTransport(transportOpts);
+    const safeName = escapeBasicHtml(name || 'User');
+    const safeToken = escapeBasicHtml(rawToken);
+    const safeLink = resetUrl ? escapeBasicHtml(resetUrl) : '';
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#F2F5F7;color:#333;">
+        <div style="background:#fff;border-radius:10px;padding:24px;border-top:4px solid #0F5298;">
+          <h2 style="margin:0 0 12px;color:#0F5298;">EduPulse Portal Password Reset</h2>
+          <p>Hello ${safeName},</p>
+          <p>We received a request to reset your EduPulse Portal password. This reset code expires in <strong>30 minutes</strong>.</p>
+          ${
+            safeLink
+              ? `<p style="margin:20px 0;"><a href="${safeLink}" style="display:inline-block;background:#0F5298;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Reset Password</a></p>`
+              : ''
+          }
+          <p style="font-size:13px;color:#555;">Or paste this reset token in the portal's Reset Password screen:</p>
+          <div style="background:#F2F5F7;padding:10px 12px;border-radius:6px;font-family:monospace;font-size:13px;word-break:break-all;">${safeToken}</div>
+          <p style="margin-top:18px;font-size:12px;color:#777;">If you did not request this, you can safely ignore this email.</p>
+        </div>
+      </div>
+    `;
+
+    const text = [
+      `Hello ${name || 'User'},`,
+      '',
+      'We received a request to reset your EduPulse Portal password (expires in 30 minutes).',
+      resetUrl ? `Reset link: ${resetUrl}` : '',
+      `Reset token: ${rawToken}`,
+      '',
+      'If you did not request this, you can safely ignore this email.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    await transporter.sendMail({
+      from,
+      to,
+      subject: 'EduPulse Portal — Password Reset Instructions',
+      text,
+      html,
+    });
+  }
+
   app.post('/api/auth/forgot-password', authLimiter, async (req, res, next) => {
     try {
       const email = cleanString(req.body.email, 160).toLowerCase();
       if (!isValidEmail(email)) {
         return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
       }
+
+      const smtpConfigured = isSmtpConfigured();
+      let deliveryAttempted = false;
+      let deliverySucceeded = false;
 
       const user = await User.findOne({ email });
       if (user) {
@@ -1609,6 +1713,24 @@ function registerRoutes() {
             },
           }
         );
+
+        if (smtpConfigured) {
+          deliveryAttempted = true;
+          try {
+            const baseUrl = getSafeResetBaseUrl(req);
+            const resetUrl = baseUrl ? `${baseUrl}/?resetToken=${encodeURIComponent(rawToken)}` : '';
+            await sendPasswordResetEmail({
+              to: user.email,
+              name: user.name,
+              resetUrl,
+              rawToken,
+            });
+            deliverySucceeded = true;
+          } catch (mailErr) {
+            console.error('[Mail] Password reset email failed:', mailErr.message);
+          }
+        }
+
         const admins = await User.find({ role: 'admin', status: 'active' }).select('_id').lean();
         if (admins.length) {
           await Notification.insertMany(
@@ -1621,12 +1743,83 @@ function registerRoutes() {
             }))
           );
         }
-        await recordActivity(req, 'PASSWORD_RESET_REQUESTED', 'User', user._id, `Reset requested for ${user.email}`, user);
+        await recordActivity(
+          req,
+          'PASSWORD_RESET_REQUESTED',
+          'User',
+          user._id,
+          `Reset requested for ${user.email} (emailSent=${deliverySucceeded})`,
+          user
+        );
       }
+
+      const message = !smtpConfigured
+        ? 'Email delivery is not configured on the server yet (missing SMTP_USER / SMTP_PASS). Your request was logged for portal administration.'
+        : deliveryAttempted && !deliverySucceeded
+          ? 'Could not deliver the reset email due to an SMTP configuration error. Your request was logged for portal administration.'
+          : 'If an account matches that email, password reset instructions have been sent. Check your inbox and spam folder.';
 
       return res.json({
         success: true,
-        message: 'If an account matches that email, your password reset request has been logged for verification.',
+        emailConfigured: smtpConfigured,
+        emailSent: smtpConfigured && (!deliveryAttempted || deliverySucceeded),
+        message,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/auth/reset-password', authLimiter, async (req, res, next) => {
+    try {
+      const token = cleanString(req.body.token, 160);
+      const newPassword = typeof req.body.newPassword === 'string' ? req.body.newPassword : '';
+      const confirmPassword = typeof req.body.confirmPassword === 'string' ? req.body.confirmPassword : '';
+
+      if (!/^[a-f0-9]{32,128}$/i.test(token)) {
+        return res.status(400).json({ success: false, message: 'Please enter a valid reset token.' });
+      }
+      if (!isStrongPassword(newPassword)) {
+        return res.status(400).json({
+          success: false,
+          message: 'New password must be >= 8 characters with uppercase, lowercase, and a number.',
+        });
+      }
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({ success: false, message: 'Passwords do not match.' });
+      }
+
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      const user = await User.findOne({
+        passwordResetToken: tokenHash,
+        passwordResetExpires: { $gt: new Date() },
+      });
+
+      if (!user) {
+        return res.status(400).json({
+          success: false,
+          message: 'Reset token is invalid or has expired. Please request a new reset.',
+        });
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await User.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            passwordHash,
+            passwordResetToken: null,
+            passwordResetExpires: null,
+            loginAttempts: 0,
+            lockUntil: null,
+          },
+        }
+      );
+
+      await recordActivity(req, 'PASSWORD_RESET_COMPLETED', 'User', user._id, `Password reset completed for ${user.email}`, user);
+      return res.json({
+        success: true,
+        message: 'Password has been reset successfully. You can now sign in with your new password.',
       });
     } catch (err) {
       return next(err);
@@ -2090,6 +2283,45 @@ function registerRoutes() {
 
       await recordActivity(req, 'ADMIN_UPDATED_STUDENT', 'User', user._id, `Updated student ${user.email} (${status})`);
       return res.json({ success: true, message: 'Student record updated.' });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/students/:id/reset-password', requireAuth, requireRole('admin'), async (req, res, next) => {
+    try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json({ success: false, message: 'Invalid student identifier.' });
+      }
+      const newPassword = typeof req.body.newPassword === 'string' ? req.body.newPassword : '';
+      if (!isStrongPassword(newPassword)) {
+        return res.status(400).json({
+          success: false,
+          message: 'New password must be >= 8 characters with uppercase, lowercase, and a number.',
+        });
+      }
+
+      const user = await User.findOne({ _id: req.params.id, role: 'student' });
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'Student not found.' });
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await User.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            passwordHash,
+            passwordResetToken: null,
+            passwordResetExpires: null,
+            loginAttempts: 0,
+            lockUntil: null,
+          },
+        }
+      );
+
+      await recordActivity(req, 'ADMIN_RESET_STUDENT_PASSWORD', 'User', user._id, `Admin reset password for ${user.email}`);
+      return res.json({ success: true, message: `Password updated for ${user.name}.` });
     } catch (err) {
       return next(err);
     }
@@ -3800,6 +4032,16 @@ function registerErrorHandlers() {
 let appReady = false;
 let appReadyPromise = null;
 let gateRegistered = false;
+let routesConfigured = false;
+let lastInitError = '';
+
+function escapeBasicHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 function registerHealthAndReadinessGate() {
   if (gateRegistered) return;
@@ -3808,31 +4050,37 @@ function registerHealthAndReadinessGate() {
   app.get('/health', (_req, res) => {
     const dbReady = mongoose.connection.readyState === 1;
     res.status(200).json({
-      success: true,
-      status: dbReady && appReady ? 'healthy' : 'initializing',
+      success: dbReady && appReady,
+      status: dbReady && appReady ? 'healthy' : lastInitError ? 'error' : 'initializing',
       dbReady,
       dbMode,
       databaseName: mongoose.connection.name || '',
       hasMongoUriEnv: Boolean(process.env.MONGODB_URI && process.env.MONGODB_URI.trim()),
-      fallbackReason: dbFallbackReason || undefined,
+      fallbackReason: dbFallbackReason || lastInitError || undefined,
       timestamp: new Date().toISOString(),
     });
   });
 
-  app.use(async (_req, res, next) => {
+  app.use(async (req, res, next) => {
     if (appReady) return next();
-    if (appReadyPromise) {
-      try {
-        await appReadyPromise;
-        return next();
-      } catch (_err) {
+    try {
+      await ensureInitialized();
+      return next();
+    } catch (err) {
+      const msg = dbFallbackReason || (err && err.message) || 'Portal database initialization failed.';
+      if (req.path.startsWith('/api')) {
         return res.status(503).json({
           success: false,
-          message: dbFallbackReason || 'Portal is initializing database connection. Please retry in a moment.',
+          message: msg,
         });
       }
+      return res
+        .status(503)
+        .type('html')
+        .send(
+          `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EduPulse Portal — Setup Required</title><style>body{font-family:system-ui,-apple-system,sans-serif;background:#F2F5F7;color:#333;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}.card{max-width:560px;background:#fff;border-radius:12px;padding:28px;box-shadow:0 4px 15px rgba(0,0,0,.1);border-top:5px solid #0F5298}h1{margin:0 0 10px;font-size:20px;color:#0F5298}p{margin:8px 0;line-height:1.55;font-size:14px}.err{background:#FDECEA;color:#B42318;padding:12px 14px;border-radius:8px;font-size:13px;margin:14px 0;word-break:break-word}code{background:#EEF2F6;padding:2px 6px;border-radius:4px}</style></head><body><div class="card"><h1>EduPulse Portal — Database Connection Required</h1><p>The server started, but could not complete database initialization:</p><div class="err">${escapeBasicHtml(msg)}</div><p>On Vercel, open <strong>Project Settings → Environment Variables</strong>, add <code>MONGODB_URI</code> (and <code>SESSION_SECRET</code>), ensure MongoDB Atlas Network Access allows <code>0.0.0.0/0</code>, and redeploy.</p></div></body></html>`
+        );
     }
-    return next();
   });
 }
 
@@ -3840,14 +4088,19 @@ function ensureInitialized() {
   registerHealthAndReadinessGate();
   if (!appReadyPromise) {
     appReadyPromise = (async () => {
+      lastInitError = '';
       await connectDatabase();
-      configureSessionMiddleware();
-      registerRoutes();
-      registerErrorHandlers();
+      if (!routesConfigured) {
+        configureSessionMiddleware();
+        registerRoutes();
+        registerErrorHandlers();
+        routesConfigured = true;
+      }
       await seedInitialData();
       appReady = true;
       console.log(`[Server] EduPulse Portal ready (dbMode=${dbMode}, env=${NODE_ENV})`);
     })().catch((err) => {
+      lastInitError = (err && err.message) || 'Initialization failed.';
       appReadyPromise = null;
       throw err;
     });
@@ -3900,7 +4153,7 @@ module.exports = async (req, res) => {
     try {
       await ensureInitialized();
     } catch (_err) {
-      // Handled by readiness gate middleware
+      // Readiness gate middleware renders diagnostic 503 response
     }
   }
   return app(req, res);
