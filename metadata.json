@@ -1,0 +1,6 @@
+{
+  "name": "EduPulse Student & Admin Management Portal",
+  "description": "Production-ready Student and Admin Management Portal with Express, MongoDB, Mongoose, EJS, and Chart.js",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

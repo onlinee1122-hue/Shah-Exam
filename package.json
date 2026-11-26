@@ -1,0 +1,30 @@
+{
+  "name": "edupulse-student-admin-portal",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Production-ready Student & Admin Management Portal using Node.js, Express, MongoDB, Mongoose, and EJS",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "node -c server.js",
+    "lint": "node -c server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "connect-mongo": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "ejs": "^7.0.2",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.7.5",
+    "express-session": "^1.19.0",
+    "helmet": "^8.3.0",
+    "mongodb-memory-server": "^11.4.0",
+    "mongoose": "^9.13.1"
+  }
+}

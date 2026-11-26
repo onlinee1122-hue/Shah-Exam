@@ -1,0 +1,1207 @@
+# MASTER PROMPT: EXPERT FULL-STACK NODE.JS DEVELOPER
+## Production-Ready JavaScript Web Application | MongoDB | Express | EJS | Render Deployment
+
+---
+
+# ROLE AND RESPONSIBILITY
+
+Act as a Senior Full-Stack JavaScript Developer, Software Architect, UI/UX Designer, Database Engineer, Security Specialist and DevOps Engineer.
+
+Your task is to design, develop and deliver a complete, production-ready, responsive JavaScript-based web portal.
+
+The application must be fully functional, professionally designed, secure, scalable within its intended scope, database-driven and deployable on Render.com.
+
+Do not produce a demo, static prototype, incomplete template, pseudocode or partially working application.
+
+Build a real application with functional authentication, database operations, role-based dashboards, file management, API endpoints, analytics, navigation and administrative functionality.
+
+Follow every requirement below carefully.
+
+# SECTION 1: TECHNICAL REQUIREMENTS
+
+## 1.1 Technology Stack
+
+Use the following mandatory technology stack.
+
+**Backend**
+- Node.js (version 18 or higher).
+- Express.js.
+- JavaScript (CommonJS).
+- Mongoose ODM.
+- REST API architecture.
+- express-session for authentication sessions.
+- connect-mongo for persistent session storage.
+- bcrypt or bcryptjs for password hashing.
+
+**Frontend**
+- EJS templating engine.
+- HTML5.
+- CSS3.
+- Vanilla JavaScript (ES6+).
+- Fetch API for asynchronous requests.
+- SPA-like navigation through JavaScript view switching.
+- No React, Vue, Angular, Next.js or other frontend frameworks.
+
+**Database**
+- MongoDB Atlas.
+- Mongoose for database models, queries and relationships.
+- Proper indexes and schema validation.
+- MongoDB transactions where supported and appropriate.
+
+**Charts and Visualization**
+- Chart.js through CDN.
+
+**Icons**
+- Font Awesome 6.5.1 through CDN.
+
+**Typography**
+- Google Fonts Poppins.
+
+## 1.2 Application Architecture
+
+The application must follow a structured architecture even though the source files are restricted.
+
+Required project structure:
+
+project/
+│
+├── server.js
+├── package.json
+│
+└── views/
+    └── index.ejs
+
+All backend middleware, database models, controllers, API routes, validation functions, authentication logic, seed functions and error handling must be implemented inside server.js.
+
+The complete frontend HTML, CSS and JavaScript must be implemented inside views/index.ejs.
+
+Do not create additional JavaScript, CSS, HTML, JSON or configuration files.
+
+Use clear internal code sections and descriptive function names to maintain readability.
+
+## 1.3 Environment Configuration
+
+Use environment variables for sensitive information.
+
+Required variables:
+
+- MONGODB_URI
+- SESSION_SECRET
+- NODE_ENV
+- PORT
+
+MongoDB connection:
+
+Use process.env.MONGODB_URI with a configurable local development fallback.
+
+Session configuration:
+
+Use process.env.SESSION_SECRET with a development fallback.
+
+Never use the development fallback in production. Fail safely when required production environment variables are missing.
+
+Render must use the configured environment variables.
+
+## 1.4 Express Configuration
+
+Configure:
+
+- Express JSON parser.
+- URL-encoded parser.
+- Appropriate request body limits.
+- EJS view engine.
+- Static file handling where required.
+- Session middleware.
+- MongoDB session store.
+- Security middleware.
+- Authentication middleware.
+- Authorization middleware.
+- API error handling.
+- 404 handling.
+- Centralized exception handling.
+
+Use secure and appropriate production settings.
+
+## 1.5 Session Management
+
+Implement express-session with connect-mongo.
+
+Required settings:
+
+- MongoDB persistent session storage.
+- httpOnly: true.
+- sameSite: 'lax'.
+- Secure cookies in production.
+- Appropriate session expiration.
+- Session regeneration after successful login.
+- Session destruction after logout.
+- Protection against session fixation.
+- Proper handling of expired sessions.
+
+Configure Express trust proxy correctly for Render HTTPS deployment.
+
+---
+
+# SECTION 2: FRONTEND, UI/UX AND DESIGN SYSTEM
+
+## 2.1 Overall Design Philosophy
+
+Create a premium, modern, professional SaaS-style management portal.
+
+The interface must have:
+
+- Clean visual hierarchy.
+- Modern dashboard layouts.
+- Consistent spacing.
+- Rounded cards.
+- Professional gradients.
+- Subtle shadows.
+- Smooth transitions.
+- Attractive navigation.
+- Responsive layouts.
+- Clearly visible interactive elements.
+
+Avoid outdated dashboard designs, excessive gradients, unnecessary animations and cluttered interfaces.
+
+## 2.2 Mandatory CSS Variables
+
+Define a centralized CSS design system using these variables:
+
+:root {
+  --theme-dark: #0F5298;
+  --theme-light: #1665B5;
+  --bg-gray: #F2F5F7;
+  --text-dark: #333333;
+  --text-muted: #777777;
+
+  --green: #27AE60;
+  --orange: #F39C12;
+  --teal: #33B89E;
+  --red: #D93025;
+
+  --white: #FFFFFF;
+  --border-color: #E5E9EF;
+
+  --shadow: 0 4px 15px rgba(0,0,0,0.10);
+  --radius: 12px;
+
+  --sidebar-width: 260px;
+  --header-height: 70px;
+}
+
+Use these variables consistently throughout the application.
+
+Do not randomly introduce different colors for similar components.
+
+## 2.3 Typography Requirements
+
+Use Google Font Poppins.
+
+Typography hierarchy:
+
+- Main page heading: 24–30px.
+- Section heading: 18–22px.
+- Card heading: 15–17px.
+- Body text: 13–15px.
+- Navigation: 13–14px.
+- Small labels: 11–12px.
+- Buttons: 13–14px.
+
+Use appropriate font weights:
+
+- 400: Regular.
+- 500: Medium.
+- 600: Semibold.
+- 700: Bold.
+
+Maintain readable line heights, consistent text spacing and sufficient contrast.
+
+## 2.4 Icon Requirements
+
+Use Font Awesome 6.5.1 CDN.
+
+Use consistent icons for:
+
+- Dashboard.
+- Students.
+- Teachers.
+- Courses.
+- Exams.
+- Questions.
+- Results.
+- Wallet.
+- Payments.
+- Inbox.
+- Notifications.
+- Profile.
+- Settings.
+- Reports.
+- Logout.
+- Search.
+- Edit.
+- Delete.
+- Download.
+- Upload.
+
+Do not mix unrelated icon styles.
+
+Icons must have appropriate sizing and alignment.
+
+## 2.5 Header Design
+
+Create a professional white top header.
+
+Include:
+
+- Application logo/name.
+- Student ID or User ID badge.
+- Welcome message.
+- Notification icon.
+- User profile menu.
+- Logout button.
+
+Use gradient status pills:
+
+- Green: Student ID.
+- Orange: Welcome.
+- Teal: Logout.
+
+Make the header responsive.
+
+## 2.6 Subheader and Breadcrumbs
+
+Create a dark blue subheader below the main header.
+
+Display:
+
+- Current module name.
+- Breadcrumb navigation.
+- Current page title.
+- Optional contextual actions.
+
+Breadcrumbs must update dynamically when the user navigates between SPA views.
+
+## 2.7 Sidebar Navigation
+
+Create a dark blue sidebar with a width of approximately 260px.
+
+Requirements:
+
+- Professional navigation icons.
+- Clearly visible labels.
+- Active menu highlighting.
+- Light blue active background.
+- Orange left border for active links.
+- Expandable menu groups where needed.
+- Smooth navigation transitions.
+- Collapsible sidebar.
+- Mobile-friendly navigation drawer.
+
+The sidebar must support different navigation menus based on user roles.
+
+## 2.8 Dashboard Layout
+
+Use a responsive grid system.
+
+Include:
+
+- Statistics cards.
+- Recent activities.
+- Notifications.
+- Data tables.
+- Progress indicators.
+- Charts.
+- Quick actions.
+- Upcoming events.
+
+Use consistent card designs, shadows, border radius and spacing.
+
+---
+
+# SECTION 3: APPLICATION REQUIREMENTS AND FUNCTIONAL MODULES
+
+Build a complete Student and Admin Management Portal.
+
+Implement the following modules.
+
+## 3.1 Authentication Module
+
+Create a centered authentication interface on a dark blue background.
+
+Include:
+
+- Login tab.
+- Registration tab.
+- Email or username field.
+- Password field.
+- Confirm password field during registration.
+- Show/hide password.
+- Remember me option where appropriate.
+- Forgot password interface.
+- Input validation.
+- Loading indicators.
+- Success and error messages.
+
+Authentication requirements:
+
+- Secure password hashing.
+- Duplicate account prevention.
+- Server-side validation.
+- Session-based authentication.
+- Protected routes.
+- Role-based redirection.
+
+Never store plaintext passwords.
+
+## 3.2 User Roles
+
+Implement at least two user roles:
+
+1. Administrator.
+2. Student.
+
+Administrators must have access to administrative modules.
+
+Students must only access their own permitted information.
+
+Enforce permissions on the backend, not just by hiding frontend navigation items.
+
+## 3.3 Student Dashboard
+
+Create a complete student dashboard.
+
+Include:
+
+**Student Profile Card**
+- Base64 profile photo upload.
+- Student name.
+- Student ID.
+- Email.
+- Contact information.
+- Registration date.
+- Account status.
+- Edit profile functionality.
+
+**Three Gradient Statistics Cards**
+- Wallet Balance.
+- Inbox Messages.
+- Examination Statistics.
+
+**Additional Dashboard Components**
+- Recent activities.
+- Upcoming examinations.
+- Latest notifications.
+- Recent results.
+- Academic progress.
+- Quick access buttons.
+
+All information must be loaded dynamically from MongoDB.
+
+## 3.4 Student Management
+
+Administrators must be able to:
+
+- Register students.
+- View all students.
+- Search students.
+- Filter students.
+- Edit student information.
+- Activate or deactivate accounts.
+- View student profiles.
+- Delete students with appropriate safeguards.
+- View student examination history.
+- View wallet information.
+
+Use pagination for large datasets.
+
+## 3.5 Examination Management
+
+Create a complete examination management module.
+
+Administrators must be able to:
+
+- Create examinations.
+- Edit examinations.
+- Delete examinations.
+- Set examination titles.
+- Add descriptions.
+- Set examination dates.
+- Configure durations.
+- Set total marks.
+- Set passing marks.
+- Assign examinations to students.
+- Publish or unpublish examinations.
+
+Students must be able to:
+
+- View available examinations.
+- View examination instructions.
+- Start an examination.
+- Submit answers.
+- View examination status.
+- View published results.
+
+Implement examination timing and submission validation on the server.
+
+## 3.6 Question Management
+
+Support question creation and management.
+
+Include:
+
+- Multiple-choice questions.
+- True/False questions.
+- Short-answer questions.
+- Question descriptions.
+- Multiple answer options.
+- Correct answer configuration.
+- Marks allocation.
+- Question categories.
+- Examination assignment.
+
+Only administrators should be allowed to access answer keys.
+
+Never expose correct answers in student-facing API responses before examination completion and authorized result publication.
+
+## 3.7 Student Answer Management
+
+Allow students to:
+
+- Submit answers.
+- Save answers where supported.
+- Upload answer files.
+- Review submission status.
+- View feedback when published.
+
+Administrators must be able to:
+
+- Review submissions.
+- Evaluate answers.
+- Award marks.
+- Add feedback.
+- Publish results.
+
+Prevent unauthorized modifications after final submission.
+
+## 3.8 Wallet Management
+
+Implement a wallet module.
+
+Include:
+
+- Current balance.
+- Credit transactions.
+- Debit transactions.
+- Transaction history.
+- Transaction dates.
+- Transaction references.
+- Transaction status.
+
+Only authorized administrators can adjust balances.
+
+Use atomic database updates and maintain an auditable transaction ledger.
+
+Do not represent an internal wallet balance as a real payment gateway.
+
+## 3.9 Inbox and Messaging
+
+Implement an internal messaging system.
+
+Features:
+
+- Send messages.
+- Receive messages.
+- Inbox.
+- Sent messages.
+- Read/unread status.
+- Message timestamps.
+- Message search.
+- Message deletion where authorized.
+
+Display unread message counts dynamically.
+
+## 3.10 Notifications
+
+Implement notifications for:
+
+- New examinations.
+- Examination deadlines.
+- Results published.
+- New messages.
+- Account updates.
+- Administrative announcements.
+
+Include read/unread functionality.
+
+## 3.11 Admin Dashboard
+
+Create a separate administrative dashboard.
+
+Include statistics:
+
+- Total students.
+- Active students.
+- Total examinations.
+- Pending submissions.
+- Published results.
+- Total messages.
+- Wallet transaction summaries.
+
+Include:
+
+- Student registration trends.
+- Examination performance charts.
+- Recent registrations.
+- Recent examination submissions.
+- Recent activities.
+- Administrative quick actions.
+
+Use real database information rather than hardcoded statistics.
+
+## 3.12 Reports and Analytics
+
+Implement reporting features.
+
+Include:
+
+- Student reports.
+- Examination reports.
+- Result reports.
+- Performance reports.
+- Wallet transaction reports.
+
+Support date filtering and relevant search options.
+
+Provide CSV export where appropriate.
+
+---
+
+# SECTION 4: DATABASE ARCHITECTURE
+
+## 4.1 Mongoose Models
+
+Create appropriate Mongoose schemas.
+
+At minimum, include:
+
+1. User.
+2. StudentProfile.
+3. Examination.
+4. Question.
+5. Submission.
+6. Result.
+7. Wallet.
+8. WalletTransaction.
+9. Message.
+10. Notification.
+11. ActivityLog.
+
+Use proper references between related collections.
+
+## 4.2 Database Requirements
+
+Each schema must include appropriate:
+
+- Required fields.
+- Data types.
+- Default values.
+- Validation.
+- Timestamps.
+- Unique constraints.
+- Indexes.
+- Relationships.
+
+Use efficient database queries.
+
+Avoid unnecessary repeated queries and unbounded document growth.
+
+## 4.3 Data Integrity
+
+Implement:
+
+- Duplicate prevention.
+- Referential integrity checks.
+- Safe deletion rules.
+- Atomic balance updates.
+- Examination submission validation.
+- Consistent transaction records.
+- Proper handling of missing records.
+
+Never trust user-supplied IDs or amounts without server-side validation.
+
+---
+
+# SECTION 5: FILE UPLOAD AND STORAGE
+
+Do not use Multer.
+
+Implement file uploads using client-side JavaScript FileReader and Base64 encoding.
+
+Supported upload categories:
+
+- Profile photos.
+- Examination question files.
+- Student answer files.
+
+Requirements:
+
+1. Read files on the client using FileReader.
+2. Convert files into Base64 data.
+3. Validate file type.
+4. Validate file size.
+5. Send uploads through authenticated API endpoints.
+6. Validate the uploaded content on the server.
+7. Store files in MongoDB.
+
+Use MongoDB GridFS for larger files to avoid MongoDB's 16 MB BSON document limitation.
+
+Small images may be stored as Base64 data in appropriate MongoDB fields if they remain within safe document-size limits.
+
+Implement:
+
+- File size restrictions.
+- MIME type verification.
+- File extension validation.
+- Secure download endpoints.
+- Authorization checks.
+- Safe file names.
+- Upload error handling.
+
+Never trust the file MIME type or extension supplied by the browser alone.
+
+Do not allow executable or dangerous file uploads.
+
+---
+
+# SECTION 6: CHARTS, GRAPHS AND DATA VISUALIZATION
+
+Use Chart.js through CDN.
+
+Create professional and responsive charts.
+
+Required chart types:
+
+- Line charts.
+- Bar charts.
+- Doughnut charts.
+- Pie charts.
+- Area-style charts where appropriate.
+
+Use charts for:
+
+- Student registration trends.
+- Examination performance.
+- Student progress.
+- Monthly statistics.
+- Wallet transactions.
+- Examination results.
+
+Requirements:
+
+- Responsive chart containers.
+- Meaningful labels.
+- Tooltips.
+- Legends.
+- Proper axes.
+- Consistent theme colors.
+- Dynamic MongoDB-driven data.
+- Empty-state handling.
+
+Do not use hardcoded chart data in production dashboards.
+
+Destroy existing chart instances before recreating them to prevent memory leaks when switching SPA views.
+
+---
+
+# SECTION 7: FRONTEND SPA NAVIGATION AND JAVASCRIPT
+
+Implement SPA-like behavior using Vanilla JavaScript and EJS.
+
+Requirements:
+
+- No React or Vue.
+- No unnecessary page reloads.
+- Dynamic content view switching.
+- Sidebar navigation.
+- Breadcrumb updates.
+- Dynamic page headings.
+- Fetch API integration.
+- Loading states.
+- Error states.
+- Success notifications.
+- Form submission handling.
+- Search and filtering.
+- Modal management.
+- Chart rendering.
+- File uploads.
+- Responsive navigation.
+
+Create a centralized JavaScript application controller.
+
+Suggested internal functions:
+
+- App.init()
+- App.navigate()
+- App.loadDashboard()
+- App.loadStudents()
+- App.loadExaminations()
+- App.loadResults()
+- App.loadMessages()
+- App.loadNotifications()
+- App.loadProfile()
+- App.loadReports()
+- App.api()
+- App.showToast()
+- App.showModal()
+- App.closeModal()
+- App.renderCharts()
+- App.uploadFile()
+- App.logout()
+
+These functions must be genuinely implemented and connected to their respective UI elements.
+
+Use event delegation where appropriate.
+
+Handle API failures gracefully.
+
+Never insert untrusted user input into HTML using unsafe innerHTML operations.
+
+Use safe DOM rendering and appropriate output escaping.
+
+---
+
+# SECTION 8: SECURITY REQUIREMENTS
+
+Security is mandatory.
+
+Implement:
+
+1. Password hashing using bcrypt.
+2. Session-based authentication.
+3. Session regeneration after login.
+4. Secure cookie configuration.
+5. CSRF protection for state-changing requests.
+6. Rate limiting for authentication endpoints.
+7. Server-side validation.
+8. Role-based authorization.
+9. Protection against NoSQL injection.
+10. XSS prevention.
+11. Secure HTTP headers using Helmet.
+12. Restricted CORS configuration where applicable.
+13. Safe error handling.
+14. Protected administrative routes.
+15. Secure file access.
+16. Password change functionality.
+17. Login failure handling.
+18. Audit logging for sensitive administrative actions.
+
+Never expose:
+
+- Password hashes.
+- Session secrets.
+- Database credentials.
+- Private environment variables.
+- Internal stack traces.
+- Administrative information to students.
+
+Do not rely on frontend validation as a security mechanism.
+
+---
+
+# SECTION 9: API DEVELOPMENT
+
+Create organized REST API endpoints inside server.js.
+
+Use consistent endpoint naming.
+
+Suggested endpoint groups:
+
+Authentication:
+- POST /api/auth/register
+- POST /api/auth/login
+- POST /api/auth/logout
+- GET /api/auth/me
+
+Students:
+- GET /api/students
+- POST /api/students
+- GET /api/students/:id
+- PUT /api/students/:id
+- DELETE /api/students/:id
+
+Examinations:
+- GET /api/examinations
+- POST /api/examinations
+- PUT /api/examinations/:id
+- DELETE /api/examinations/:id
+
+Questions:
+- GET /api/examinations/:id/questions
+- POST /api/examinations/:id/questions
+
+Submissions:
+- POST /api/submissions
+- GET /api/submissions
+- GET /api/submissions/:id
+
+Results:
+- GET /api/results
+- POST /api/results
+
+Wallet:
+- GET /api/wallet
+- GET /api/wallet/transactions
+
+Messages:
+- GET /api/messages
+- POST /api/messages
+- PUT /api/messages/:id/read
+
+Notifications:
+- GET /api/notifications
+- PUT /api/notifications/:id/read
+
+Profile:
+- GET /api/profile
+- PUT /api/profile
+- POST /api/profile/photo
+
+Files:
+- POST /api/files/upload
+- GET /api/files/:id
+- DELETE /api/files/:id
+
+Reports:
+- GET /api/reports/dashboard
+- GET /api/reports/students
+- GET /api/reports/examinations
+
+These are suggested routes. Implement appropriate authorization and validation for every endpoint.
+
+Use correct HTTP status codes and consistent JSON response structures.
+
+---
+
+# SECTION 10: RESPONSIVE DESIGN
+
+The entire application must work on:
+
+- Desktop computers.
+- Laptops.
+- Tablets.
+- Android phones.
+- iPhones.
+
+Responsive requirements:
+
+- Desktop sidebar.
+- Collapsible tablet sidebar.
+- Mobile navigation drawer.
+- Responsive dashboard cards.
+- Responsive tables.
+- Mobile-friendly forms.
+- Proper modal sizing.
+- Responsive charts.
+- Touch-friendly controls.
+
+No horizontal overflow on mobile screens.
+
+---
+
+# SECTION 11: HOSTING AND DEPLOYMENT
+
+Target platform: Render.com.
+
+Requirements:
+
+- Correct Express start configuration.
+- Dynamic PORT configuration.
+- Production environment handling.
+- MongoDB Atlas connection.
+- Persistent session storage.
+- Correct trust proxy configuration.
+- Production cookie settings.
+- Proper error logging.
+- Graceful shutdown.
+- Database connection error handling.
+
+Package.json must include:
+
+- Application name.
+- Version.
+- Description.
+- Main entry point.
+- Start script.
+- Development script.
+- Node engine requirement.
+- All required dependencies.
+
+Use Node.js >=18.0.0.
+
+Provide clear Render deployment instructions.
+
+Document all required environment variables.
+
+Do not assume the local development environment and Render production environment have identical settings.
+
+---
+
+# SECTION 12: SEED DATA AND INITIAL ADMINISTRATOR
+
+Create an automatic seed-data mechanism inside server.js.
+
+Seed data must include:
+
+**Administrator**
+- Name.
+- Email.
+- Securely hashed password.
+- Admin role.
+- Active status.
+
+**Sample Students**
+- Student names.
+- Unique student IDs.
+- Email addresses.
+- Hashed passwords.
+- Registration dates.
+- Profile information.
+- Wallet balances.
+
+Also create sample:
+
+- Examinations.
+- Questions.
+- Results.
+- Messages.
+- Notifications.
+
+Seed operations must be idempotent.
+
+Do not create duplicate administrators or students every time the server restarts.
+
+Never overwrite an existing administrator's password automatically.
+
+Provide configurable initial administrator credentials through environment variables.
+
+Document the development seed accounts clearly.
+
+---
+
+# SECTION 13: ERROR HANDLING AND APPLICATION RELIABILITY
+
+Implement professional error handling.
+
+Handle:
+
+- Invalid login.
+- Expired sessions.
+- Unauthorized requests.
+- Missing records.
+- Duplicate records.
+- Database disconnections.
+- Invalid file uploads.
+- Oversized payloads.
+- Failed API requests.
+- Invalid form submissions.
+- Network failures.
+- Server errors.
+
+Display user-friendly frontend messages.
+
+Log detailed technical errors on the server without exposing sensitive information to end users.
+
+Include appropriate loading indicators and empty states.
+
+Prevent duplicate form submissions.
+
+---
+
+# SECTION 14: CODE QUALITY AND IMPLEMENTATION RULES
+
+The application must be developed with production-oriented coding standards.
+
+Requirements:
+
+- Clean and readable code.
+- Descriptive function names.
+- Consistent indentation.
+- Meaningful comments.
+- Reusable helper functions.
+- Proper error handling.
+- Modular internal organization.
+- No unnecessary code duplication.
+- No placeholder functionality.
+- No fake API responses.
+- No unfinished TODO sections.
+- No pseudocode.
+- No missing functions.
+- No broken navigation links.
+- No nonfunctional buttons.
+
+The original target is:
+
+- server.js: approximately 700+ lines.
+- views/index.ejs: approximately 1,200+ lines.
+
+Aim for this level of implementation detail when justified by actual functionality.
+
+However, never add meaningless comments, repeated code or artificial padding simply to reach a line count.
+
+Correctness, security, completeness and maintainability are more important than arbitrary line counts.
+
+---
+
+# SECTION 15: TESTING AND QUALITY ASSURANCE
+
+Before declaring the application complete, verify:
+
+**Backend**
+- Server starts successfully.
+- MongoDB connects successfully.
+- All models initialize.
+- All API routes work.
+- Authentication works.
+- Sessions persist correctly.
+- Authorization is enforced.
+- File uploads work.
+- Error handling works.
+
+**Frontend**
+- Login and registration work.
+- Dashboard loads.
+- Sidebar navigation works.
+- Breadcrumbs update.
+- Forms validate.
+- Modals work.
+- Charts render.
+- Notifications work.
+- Profile editing works.
+- File uploads work.
+- Logout works.
+
+**Database**
+- Student records save.
+- Examination records save.
+- Questions save.
+- Submissions save.
+- Results save.
+- Wallet transactions save.
+- Messages save.
+
+**Security**
+- Students cannot access admin APIs.
+- Unauthorized users cannot access protected routes.
+- Passwords are hashed.
+- Session cookies are secure.
+- Input validation works.
+- File uploads are restricted.
+
+**Responsive Design**
+- Desktop layout works.
+- Tablet layout works.
+- Mobile layout works.
+- No horizontal overflow.
+
+Do not claim that a test passed unless it has actually been performed.
+
+---
+
+# SECTION 16: FINAL DELIVERABLES
+
+Provide the following complete files:
+
+1. server.js
+2. package.json
+3. views/index.ejs
+
+Every file must contain complete, executable source code.
+
+Do not omit code with statements such as:
+
+- Continue similarly.
+- Add your remaining routes.
+- Implement this function later.
+- Existing code remains unchanged.
+- Pseudocode goes here.
+
+Do not replace actual implementations with explanations.
+
+The frontend must contain all required HTML, CSS and JavaScript.
+
+The backend must contain all required middleware, database models, routes, seed logic and security controls.
+
+The application must not depend on additional custom source files.
+
+External CDN libraries are permitted for the specified frontend dependencies.
+
+---
+
+# SECTION 17: FINAL RESPONSE FORMAT
+
+Present the final development output in this order:
+
+**PART 1 — PROJECT OVERVIEW**
+- Architecture.
+- Technology stack.
+- Features.
+- Database design.
+
+**PART 2 — PACKAGE.JSON**
+- Complete executable package configuration.
+
+**PART 3 — SERVER.JS**
+- Complete backend.
+- All middleware.
+- All database models.
+- All API routes.
+- Authentication.
+- Security.
+- File handling.
+- Seed data.
+
+**PART 4 — VIEWS/INDEX.EJS**
+- Complete HTML.
+- Complete CSS.
+- Complete frontend JavaScript.
+- All dashboards.
+- All functional modules.
+- SPA navigation.
+- API integration.
+- Charts.
+
+**PART 5 — DATABASE AND DEPLOYMENT**
+- MongoDB Atlas setup.
+- Environment variables.
+- Render deployment instructions.
+
+**PART 6 — TESTING**
+- Verification checklist.
+- Known limitations, if any.
+- Initial administrator setup.
+
+---
+
+# FINAL INSTRUCTIONS
+
+Read and understand the complete requirements before writing code.
+
+Plan the database architecture, backend routes, authentication flow and frontend navigation before implementation.
+
+Maintain consistency between frontend API calls, backend endpoints and MongoDB schemas.
+
+Never create frontend functionality without implementing its corresponding backend logic.
+
+Never create API endpoints that are not connected to the actual application.
+
+Every displayed statistic must be derived from real database data.
+
+Every button, form, navigation item and action must work as intended.
+
+Prioritize security, database integrity, application reliability, responsive design and professional UI/UX.
+
+If the response or generation environment cannot accommodate all three complete files in one response, divide the implementation into clearly numbered parts and continue from the exact stopping point without omitting or repeating code.
+
+Do not claim deployment, testing or production readiness without verification.
+
+**FINAL OBJECTIVE: Deliver a complete, secure, professional, database-driven, responsive and deployable Student & Admin Management Portal using Node.js, Express.js, MongoDB, EJS and Vanilla JavaScript, hosted on Render.com.**
