@@ -296,7 +296,13 @@ async function connectDatabase() {
 
   const uri = process.env.MONGODB_URI ? process.env.MONGODB_URI.trim() : '';
 
+  const isVercel = Boolean(process.env.VERCEL);
+
   if (!uri) {
+    if (isVercel) {
+      dbFallbackReason = 'MONGODB_URI is not configured in Vercel Environment Variables.';
+      throw new Error(dbFallbackReason);
+    }
     await connectLocalOrMemoryFallback();
   } else {
     const connectOpts = {
@@ -315,6 +321,9 @@ async function connectDatabase() {
       console.log(`[DB] Connected to MongoDB (${dbMode}, db: ${mongoose.connection.name}).`);
     } catch (err) {
       dbFallbackReason = `${err.name || 'Error'}: ${err.message}`;
+      if (isVercel) {
+        throw err;
+      }
       console.warn(
         '[DB] Could not reach MONGODB_URI (' +
           err.message +
@@ -613,11 +622,20 @@ app.use(
   })
 );
 
+const VERCEL_ORIGINS = new Set(
+  [
+    process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}`,
+    process.env.VERCEL_BRANCH_URL && `https://${process.env.VERCEL_BRANCH_URL}`,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`,
+  ].filter(Boolean)
+);
+
 app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
       if (APP_URL && origin === APP_URL) return callback(null, true);
+      if (VERCEL_ORIGINS.has(origin)) return callback(null, true);
       if (/^https:\/\/ais-(dev|pre)-[a-z0-9-]+\.[a-z0-9.-]+$/.test(origin)) {
         return callback(null, true);
       }
@@ -3781,8 +3799,12 @@ function registerErrorHandlers() {
 
 let appReady = false;
 let appReadyPromise = null;
+let gateRegistered = false;
 
 function registerHealthAndReadinessGate() {
+  if (gateRegistered) return;
+  gateRegistered = true;
+
   app.get('/health', (_req, res) => {
     const dbReady = mongoose.connection.readyState === 1;
     res.status(200).json({
@@ -3806,12 +3828,31 @@ function registerHealthAndReadinessGate() {
       } catch (_err) {
         return res.status(503).json({
           success: false,
-          message: 'Portal is initializing database connection. Please retry in a moment.',
+          message: dbFallbackReason || 'Portal is initializing database connection. Please retry in a moment.',
         });
       }
     }
     return next();
   });
+}
+
+function ensureInitialized() {
+  registerHealthAndReadinessGate();
+  if (!appReadyPromise) {
+    appReadyPromise = (async () => {
+      await connectDatabase();
+      configureSessionMiddleware();
+      registerRoutes();
+      registerErrorHandlers();
+      await seedInitialData();
+      appReady = true;
+      console.log(`[Server] EduPulse Portal ready (dbMode=${dbMode}, env=${NODE_ENV})`);
+    })().catch((err) => {
+      appReadyPromise = null;
+      throw err;
+    });
+  }
+  return appReadyPromise;
 }
 
 async function startServer() {
@@ -3822,17 +3863,7 @@ async function startServer() {
       console.log(`[Server] EduPulse Portal listening on http://0.0.0.0:${PORT} (${NODE_ENV})`);
     });
 
-    appReadyPromise = (async () => {
-      await connectDatabase();
-      configureSessionMiddleware();
-      registerRoutes();
-      registerErrorHandlers();
-      await seedInitialData();
-      appReady = true;
-      console.log(`[Server] EduPulse Portal ready (dbMode=${dbMode}, env=${NODE_ENV})`);
-    })();
-
-    await appReadyPromise;
+    await ensureInitialized();
   } catch (err) {
     console.error('[Fatal] Failed to start server:', err);
     process.exit(1);
@@ -3857,7 +3888,20 @@ async function shutdown(signal) {
   }
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+if (require.main === module) {
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  startServer();
+}
 
-startServer();
+module.exports = async (req, res) => {
+  registerHealthAndReadinessGate();
+  if (req.url !== '/health') {
+    try {
+      await ensureInitialized();
+    } catch (_err) {
+      // Handled by readiness gate middleware
+    }
+  }
+  return app(req, res);
+};
